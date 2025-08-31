@@ -1,78 +1,50 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
 import os
-import uuid
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from open_interpreter import interpreter
+from dotenv import load_dotenv
 
-# Assuming docker_manager.py is in the same directory
-import docker_manager
-
-# Define the base path for generated projects
-PROJECTS_DIR = os.path.abspath("../generated_projects")
-if not os.path.exists(PROJECTS_DIR):
-    os.makedirs(PROJECTS_DIR)
+# Load environment variables from .env file
+load_dotenv()
 
 app = FastAPI()
 
-class GenerateRequest(BaseModel):
-    prompt: str
-    session_id: str | None = None
-
-class GenerateResponse(BaseModel):
-    session_id: str
-    status: str
-    stdout: str | None = None
-    stderr: str | None = None
-    code: str # Will be added later
+# Configure the interpreter instance
+# This will be configured once and reused for all connections.
+# For a multi-user scenario, you'd create one instance per user/session.
+interpreter.llm.model = "deepseek-coder"
+interpreter.llm.api_key = os.getenv("DEEPSEEK_API_KEY")
+interpreter.llm.api_base = os.getenv("OPENAI_API_BASE")
+interpreter.auto_run = True
+interpreter.disable_telemetry = True
 
 @app.get("/")
 async def root():
-    return {"message": "Mini-UFO 4 Backend is running"}
-
-@app.post("/generate", response_model=GenerateResponse)
-async def generate_code(req: GenerateRequest):
-    """
-    Handles code generation and execution request.
-    """
-    session_id = req.session_id or str(uuid.uuid4())
-    project_path = os.path.join(PROJECTS_DIR, session_id)
-    log_path = os.path.join(project_path, "context.log")
-
-    # Create project directory if it doesn't exist
-    if not os.path.exists(project_path):
-        os.makedirs(project_path)
-
-    # --- This is the temporary part for testing ---
-    # We're treating the prompt directly as code to test execution
-    code_to_execute = req.prompt
-    # --- End of temporary part ---
-
-    # Log the prompt
-    with open(log_path, "a") as log_file:
-        log_file.write(f"--- PROMPT ---\n{req.prompt}\n\n")
-
-    # Execute the code
-    stdout, stderr = docker_manager.execute_code_in_container(
-        code_string=code_to_execute,
-        language="python",
-        project_path=project_path
-    )
-
-    # Log the output
-    with open(log_path, "a") as log_file:
-        log_file.write(f"--- LLM/EXECUTION OUTPUT ---\n")
-        if stdout:
-            log_file.write(f"STDOUT:\n{stdout}\n")
-        if stderr:
-            log_file.write(f"STDERR:\n{stderr}\n")
-        log_file.write("\n")
+    return {"message": "Mini-UFO 4 Backend is running and ready for WebSocket connections."}
 
 
-    status = "error" if stderr else "success"
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            # Wait for a message (the prompt) from the client
+            prompt = await websocket.receive_text()
 
-    return GenerateResponse(
-        session_id=session_id,
-        status=status,
-        stdout=stdout,
-        stderr=stderr,
-        code=code_to_execute
-    )
+            # The .chat() method returns a generator that yields messages
+            for chunk in interpreter.chat(prompt, display=False, stream=True):
+                # Send each chunk over the websocket to the client
+                await websocket.send_json(chunk)
+
+            # Signal the end of the stream
+            await websocket.send_json({"end_of_stream": True})
+
+    except WebSocketDisconnect:
+        print("Client disconnected")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        await websocket.send_json({"error": str(e)})
+    finally:
+        # Reset the interpreter's state for the next session if needed
+        interpreter.reset()
+        print("Connection closed and interpreter reset.")
+
