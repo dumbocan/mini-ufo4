@@ -86,5 +86,10 @@ Mini-UFO 4 es una aplicación web que actúa como un agente de programación int
    - Valoro la legibilidad del código y la organización del proyecto.
 
    **Lo que te pido:**
-   Por favor, asume el rol de mi asistente de ingeniería de software para este proyecto. Estoy listo para continuar desarrollando nuevas funcionalidades o depurar cualquier problema que surja. ¿En qué podemos trabajar ahora?
+   Por favor, asume el rol de mi asistente de ingeniería de ingeniería de software para este proyecto. Estoy listo para continuar desarrollando nuevas funcionalidades o depurar cualquier problema que surja.
+
+   **Próximos Pasos / Funcionalidades a Desarrollar:**
+   - **Explorador de Archivos y Gestión Multi-Archivo en Frontend:** Extender la interfaz web para incluir un explorador de archivos que permita visualizar, seleccionar y editar múltiples archivos dentro de un proyecto generado por el agente, similar a un IDE web (como Replit). Esto permitirá trabajar en proyectos más complejos directamente desde la interfaz.
+
+   ¿En qué podemos trabajar ahora?
    ```
