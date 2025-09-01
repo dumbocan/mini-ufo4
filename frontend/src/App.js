@@ -9,63 +9,101 @@ import 'prismjs/components/prism-javascript';
 import 'prismjs/components/prism-python';
 import 'prismjs/themes/prism.css';
 
-// FastAPI uses a different WebSocket library, so we can't use socket.io-client directly.
-// We need to use the native WebSocket API.
 const WS_URL = 'ws://localhost:8000/ws';
 
 function App() {
   const [prompt, setPrompt] = useState('');
   const [code, setCode] = useState('');
-  const [consoleOutput, setConsoleOutput] = useState([]);
+  const [consoleOutput, setConsoleOutput] = useState(''); // Changed to string
   const [isLoading, setIsLoading] = useState(false);
   const socket = useRef(null);
+  const currentMessageBuffer = useRef(''); // Buffer for 'message' type chunks
+  const currentCodeBuffer = useRef(''); // New buffer for code
 
   useEffect(() => {
-    // Connect to the WebSocket server
     socket.current = new WebSocket(WS_URL);
 
     socket.current.onopen = () => {
       console.log('WebSocket connected');
-      setConsoleOutput(prev => [...prev, { type: 'status', content: 'Connected to backend.' }]);
+      setConsoleOutput(prev => prev + 'Connected to backend.\n');
     };
 
     socket.current.onmessage = (event) => {
       const message = JSON.parse(event.data);
 
+      // Helper to process message content for display
+      const processMessageContent = (content) => {
+        let processed = content;
+        // Rule 1: Replace double newlines with single newline
+        processed = processed.replace(/\n\n/g, '\n');
+        // Rule 2: Replace single newlines with a space
+        processed = processed.replace(/\n/g, ' ');
+        return processed.trim();
+      };
+
+      // Helper to flush the current message buffer
+      const flushMessageBuffer = () => {
+        if (currentMessageBuffer.current) {
+          setConsoleOutput(prev => prev + processMessageContent(currentMessageBuffer.current) + '\n');
+          currentMessageBuffer.current = '';
+        }
+      };
+
+      // Helper to flush the current code buffer
+      const flushCodeBuffer = () => {
+        if (currentCodeBuffer.current) {
+          setConsoleOutput(prev => prev + '\n--- CODE ---\n' + currentCodeBuffer.current + '\n');
+          currentCodeBuffer.current = '';
+        }
+      };
+
       if (message.end_of_stream) {
+        flushMessageBuffer();
+        flushCodeBuffer(); // Flush any pending code
         setIsLoading(false);
-        setConsoleOutput(prev => [...prev, { type: 'status', content: 'Task finished.' }]);
+        setConsoleOutput(prev => prev + 'Task finished.\n');
         return;
       }
       
       if (message.error) {
-        setConsoleOutput(prev => [...prev, { type: 'error', content: message.error }]);
+        flushMessageBuffer();
+        flushCodeBuffer(); // Flush any pending code
+        setConsoleOutput(prev => prev + `Error: ${message.error}\n`);
         setIsLoading(false);
         return;
       }
 
-      // Update console output
-      setConsoleOutput(prev => [...prev, message]);
-
-      // Update code if it's in the message
-      if (message.type === 'code' && message.content) {
-        setCode(message.content);
+      if (message.type === 'message' && message.content) {
+        flushCodeBuffer(); // If a message comes, flush any pending code
+        currentMessageBuffer.current += message.content;
+      } else if (message.type === 'code' && message.content) {
+        flushMessageBuffer(); // If code comes, flush any pending message
+        currentCodeBuffer.current += message.content; // Accumulate code
+        setCode(prevCode => prevCode + message.content); // Still update code editor
+      } else if (message.type === 'console' && message.content) {
+        flushMessageBuffer(); // Flush any pending message
+        flushCodeBuffer(); // Flush any pending code
+        setConsoleOutput(prev => prev + '\n--- OUTPUT ---\n' + message.content + '\n');
+      } else if (message.type === 'status' && message.content) {
+        flushMessageBuffer(); // Flush any pending message
+        flushCodeBuffer(); // Flush any pending code
+        setConsoleOutput(prev => prev + `Status: ${message.content}\n`);
       }
+      // Ignore start/end markers or other unknown types
     };
 
     socket.current.onclose = () => {
       console.log('WebSocket disconnected');
-      setConsoleOutput(prev => [...prev, { type: 'status', content: 'Disconnected from backend.' }]);
+      setConsoleOutput(prev => prev + 'Disconnected from backend.\n');
       setIsLoading(false);
     };
 
     socket.current.onerror = (error) => {
       console.error('WebSocket error:', error);
-      setConsoleOutput(prev => [...prev, { type: 'error', content: 'WebSocket connection error.' }]);
+      setConsoleOutput(prev => prev + 'WebSocket connection error.\n');
       setIsLoading(false);
     };
 
-    // Clean up the connection when the component unmounts
     return () => {
       if (socket.current) {
         socket.current.close();
@@ -75,20 +113,14 @@ function App() {
 
   const handleGenerate = () => {
     if (!prompt || !socket.current || socket.current.readyState !== WebSocket.OPEN) {
-      setConsoleOutput([{ type: 'error', content: 'Please enter a prompt and ensure you are connected to the backend.' }]);
+      setConsoleOutput('Please enter a prompt and ensure you are connected to the backend.\n');
       return;
     }
     setIsLoading(true);
-    setConsoleOutput([]); // Clear console on new prompt
+    setConsoleOutput(''); // Clear console on new prompt
     setCode(''); // Clear code on new prompt
     socket.current.send(prompt);
   };
-
-  const renderMessage = (msg, index) => {
-    // This function will render different message types differently
-    // For now, a simple JSON representation
-    return <div key={index} className={`message-type-${msg.type}`}>{JSON.stringify(msg)}</div>;
-  }
 
   const editorStyle = {
     fontFamily: '"Fira code", "Fira Mono", monospace',
@@ -145,9 +177,9 @@ function App() {
           </Form>
 
           <h5 className="mt-4">Console</h5>
-          <div style={consoleStyle}>
-            {consoleOutput.map(renderMessage)}
-          </div>
+          <pre style={consoleStyle}>
+            {consoleOutput}
+          </pre>
         </Col>
         <Col md={6}>
           <h5>Generated Code</h5>

@@ -1,6 +1,7 @@
 import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from open_interpreter import interpreter
+from fastapi.middleware.cors import CORSMiddleware
+from interpreter import interpreter
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -8,11 +9,25 @@ load_dotenv()
 
 app = FastAPI()
 
+origins = [
+    "http://localhost:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Configure the interpreter instance
 # This will be configured once and reused for all connections.
 # For a multi-user scenario, you'd create one instance per user/session.
-interpreter.llm.model = "deepseek-coder"
+interpreter.llm.model = "deepseek/deepseek-coder"
 interpreter.llm.api_key = os.getenv("DEEPSEEK_API_KEY")
+if os.getenv("DEEPSEEK_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+    os.environ["OPENAI_API_KEY"] = os.environ["DEEPSEEK_API_KEY"]
 interpreter.llm.api_base = os.getenv("OPENAI_API_BASE")
 interpreter.auto_run = True
 interpreter.disable_telemetry = True
