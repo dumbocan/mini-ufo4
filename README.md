@@ -1,5 +1,9 @@
 # Mini-UFO 4: Agente de Programación con Auto-Corrección (DeepSeek + Open Interpreter)
 
+
+
+# Mini-UFO 4: Agente de Programación con Auto-Corrección (DeepSeek + Open Interpreter)
+
 **Descripción del Proyecto:**
 Mini-UFO 4 es una aplicación web que actúa como un agente de programación inteligente. Permite a los usuarios describir una tarea en lenguaje natural (un "prompt"), y el agente genera el código necesario, lo ejecuta, y si encuentra errores, los depura y corrige de forma autónoma hasta que la tarea se completa con éxito. La aplicación está diseñada para ser segura, utilizando contenedores Docker para la ejecución del código, y ofrece una interfaz de usuario interactiva con retroalimentación en tiempo real.
 
@@ -88,3 +92,72 @@ Mini-UFO 4 es una aplicación web que actúa como un agente de programación int
    **Lo que te pido:**
    Por favor, asume el rol de mi asistente de ingeniería de software para este proyecto. Estoy listo para continuar desarrollando nuevas funcionalidades o depurar cualquier problema que surja. ¿En qué podemos trabajar ahora?
    ```
+
+  ## mini-ufo4.2 — Resumen de la sesión de trabajo
+  Breve plan: revisar y estabilizar el backend WebSocket, corregir errores de configuración (variables de entorno y duplicados en `main.py`), probar localmente y en Docker, y dejar una lista clara de tareas para continuar.
+
+  Checklist (estado):
+  - Revisar e integrar imports y clases en `backend/main.py` — Hecho
+  - Eliminar duplicados y código fuera de lugar en `backend/main.py` — Hecho
+  - Añadir `ConnectionManager` y `heartbeat_check` — Hecho
+  - Corregir manejo del WebSocket (timeouts, heartbeats, streaming) — Hecho
+  - Corregir formato de `.env` que provocaba 401 — Hecho
+  - Construir imagen Docker y probar container — Hecho
+  - Ejecutar smoke test HTTP + WebSocket — Hecho
+
+  Qué desechamos / eliminamos (por claridad):
+  - Eliminamos definiciones duplicadas de `ConnectionManager` que causaban confusión y errores de estado.
+  - Quitamos código suelto/fragmentos fuera del bucle en `websocket_endpoint` que rompía la indentación y el flujo.
+  - Eliminamos una comilla extra en `backend/.env` que convertía la API key en inválida (causaba 401 en DeepSeek).
+
+  Qué implementamos y por qué (detalles técnicos):
+  - `ConnectionManager` (en `backend/main.py`): centraliza conexiones WebSocket, último heartbeat y envío de estados (`send_status`). Permite cerrar conexiones inactivas.
+  - `heartbeat_check()` (task en startup): revisa periódicamente `manager.active_connections` y cierra conexiones muertas; además envía pings/heartbeats.
+  - WebSocket handler (`/ws`): ahora acepta heartbeats JSON (tipo `{"type":"heartbeat"}`), actualiza timestamps, aplica timeouts para ejecución de tareas (`EXECUTION_TIMEOUT`) y stream de chunks desde `interpreter.chat(...)` hacia el cliente.
+  - `.env` corregido: `DEEPSEEK_API_KEY` sin comillas alrededor del valor (antes tenía una comilla final que hacía la key inválida).
+  - Docker: añadimos y usamos `backend/Dockerfile` para construir la imagen `mini-ufo4-backend` y ejecutar el contenedor mapeando el puerto 8000.
+
+  Comandos principales para reproducir (rápido):
+
+  1) Build y run con Docker (recomendado):
+  ```bash
+  # desde la raíz del repo
+  docker build -t mini-ufo4-backend ./backend
+  docker run --rm -d --name mini-ufo4-backend -p 8000:8000 --env-file ./backend/.env mini-ufo4-backend
+  ```
+
+  2) Probar endpoint raíz (host):
+  ```bash
+  curl http://127.0.0.1:8000/
+  ```
+
+  3) Probar WebSocket (cliente de prueba incluido):
+  - En `backend/` hay un script de prueba `test_ws_client.py` usado para validar heartbeats y prompts.
+  - Ejecutado con el Python del `venv` o con un Python que tenga `websockets`:
+  ```bash
+  python backend/test_ws_client.py
+  ```
+
+  Pruebas realizadas y resultados clave:
+  - `curl /` devolvió 200 OK con el mensaje de servicio activo.
+  - El cliente WebSocket envió un heartbeat y recibió confirmación (`{"type":"status","status":"connected"}`).
+  - Envío de prompt de prueba `print('hello from test')` produjo streaming de chunks desde el LLM y la ejecución del código dentro del entorno (se recibió `hello from test` en la consola del stream).
+  - Inicialmente el LLM devolvía 401; root cause: comilla extra en `backend/.env`. Tras corregir `.env` el servicio de generación y ejecución funcionó correctamente.
+
+  Tareas pendientes / para el día siguiente:
+  - Revisar y, si procede, aislar por sesión el `interpreter` (crear instancia por sesión/usuario) para evitar estado compartido entre conexiones.
+  - Añadir tests automáticos (unit + smoke) y un pequeño `Makefile` con comandos `build`, `run`, `test`.
+  - Reforzar seguridad y límites en ejecución de código (cgroup/timeout/recursos) si se va a exponer más ampliamente.
+  - Revisar el frontend para evitar bloqueos (el problema original de 'hang' puede necesitar ajustes en la reconexión WS y manejo de errores de stream).
+  - Añadir logging estructurado y rotación de logs para `backend` y `generated_projects`.
+  - Integrar CI simple que haga build Docker y ejecute el smoke test.
+
+  Notas operativas importantes:
+  - Archivo principal backend: `backend/main.py` (contiene la lógica WebSocket / interpreter).
+  - Variables sensibles: `backend/.env` (no subir claves a repositorio público).
+  - Imagen Docker creada en esta sesión: `mini-ufo4-backend` y el contenedor se lanzó mapeando `8000:8000`.
+
+  Si quieres, mañana puedo:
+  - Añadir un `Makefile` y tests automáticos.
+  - Hacer que el `interpreter` sea por sesión y añadir limpieza más agresiva al desconectar.
+  - Revisar el frontend para mejorar reconexiones y evitar bloqueos.
