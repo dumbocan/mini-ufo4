@@ -2,3 +2,7 @@ fastapi
 uvicorn[standard]
 python-dotenv
 open-interpreter
+pytest
+httpx
+fastapi-structlog
+asgi-correlation-id

@@ -1,12 +1,22 @@
 import os
 import json
 import asyncio
+import logging
 from datetime import datetime
 from typing import Optional, Dict, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from interpreter import interpreter
+from interpreter import OpenInterpreter
 from dotenv import load_dotenv
+from asgi_correlation_id import CorrelationIdMiddleware
+from fastapi_structlog.middleware import StructlogMiddleware
+from routers import projects # Import the new router
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("uvicorn.access").disabled = True
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -20,14 +30,14 @@ def _validate_and_normalize_env():
     """
     key = os.getenv("DEEPSEEK_API_KEY")
     if not key:
-        print("WARNING: DEEPSEEK_API_KEY no está definida. Las llamadas al LLM fallarán si falta la clave.")
+        logger.warning("DEEPSEEK_API_KEY not defined. LLM calls will fail without it.")
         return
 
     # Detectar y eliminar comillas envolventes accidentales
     if (key.startswith("'") and key.endswith("'")) or (key.startswith('"') and key.endswith('"')):
         cleaned = key[1:-1]
         os.environ["DEEPSEEK_API_KEY"] = cleaned
-        print("WARNING: DEEPSEEK_API_KEY contenía comillas envolventes; se han eliminado automáticamente.")
+        logger.warning("DEEPSEEK_API_KEY contained quotes; they have been removed automatically.")
 
     # Asegurar compatibilidad con librerías que usan OPENAI_API_KEY
     if os.getenv("DEEPSEEK_API_KEY") and not os.getenv("OPENAI_API_KEY"):
@@ -46,12 +56,29 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
+        
+        # Create a new interpreter instance for this session
+        session_interpreter = OpenInterpreter()
+        session_interpreter.llm.model = "deepseek/deepseek-coder"
+        session_interpreter.llm.api_key = os.getenv("DEEPSEEK_API_KEY")
+        session_interpreter.llm.api_base = os.getenv("OPENAI_API_BASE")
+        session_interpreter.auto_run = True
+        session_interpreter.disable_telemetry = True
+        session_interpreter.safe_mode = "auto"
+
         self.active_connections[websocket] = {
-            "last_heartbeat": datetime.now()
+            "last_heartbeat": datetime.now(),
+            "interpreter": session_interpreter
         }
+        logger.info("New client connected, interpreter instance created.", extra={"client": websocket.client})
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
+            # Clean up the interpreter instance
+            session_interpreter = self.active_connections[websocket].get("interpreter")
+            if session_interpreter:
+                session_interpreter.reset()
+                logger.info("Interpreter state reset for disconnected client.", extra={"client": websocket.client})
             del self.active_connections[websocket]
 
     async def send_status(self, websocket: WebSocket, status: str, message: str):
@@ -63,7 +90,7 @@ class ConnectionManager:
                 "message": message
             })
         except Exception as e:
-            print(f"Error al enviar estado: {e}")
+            logger.error("Error sending status", extra={"error": str(e), "client": websocket.client})
 
     async def check_connections(self):
         """Verifica y cierra conexiones inactivas"""
@@ -79,6 +106,11 @@ class ConnectionManager:
                 self.disconnect(ws)
 
 app = FastAPI()
+app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(StructlogMiddleware)
+
+app.include_router(projects.router, prefix="/projects", tags=["projects"])
+
 manager = ConnectionManager()
 
 origins = [
@@ -93,14 +125,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure the interpreter instance
-# This will be configured once and reused for all connections.
-# For a multi-user scenario, you'd create one instance per user/session.
-interpreter.llm.model = "deepseek/deepseek-coder"
-interpreter.llm.api_key = os.getenv("DEEPSEEK_API_KEY")
-interpreter.llm.api_base = os.getenv("OPENAI_API_BASE")
-interpreter.auto_run = True
-interpreter.disable_telemetry = True
+
 
 async def heartbeat_check():
     """Tarea en segundo plano para verificar la salud de las conexiones"""
@@ -132,6 +157,8 @@ async def websocket_endpoint(websocket: WebSocket):
     """Punto de entrada principal para conexiones WebSocket"""
     await manager.connect(websocket)
     try:
+        session_interpreter = manager.active_connections[websocket]["interpreter"]
+
         while True:
             # Esperar mensaje o heartbeat con timeout
             data = await asyncio.wait_for(
@@ -158,7 +185,7 @@ async def websocket_endpoint(websocket: WebSocket):
             
             # Procesar con interpreter
             task_start_time = datetime.now()
-            for chunk in interpreter.chat(data, display=False, stream=True):
+            for chunk in session_interpreter.chat(data, display=False, stream=True):
                 # Verificar timeout de ejecución
                 if (datetime.now() - task_start_time).seconds > EXECUTION_TIMEOUT:
                     raise TimeoutError("La ejecución excedió el tiempo límite")
@@ -177,16 +204,15 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.send_text(json.dumps({"end_of_stream": True}))
                 
     except WebSocketDisconnect:
-        print("Cliente desconectado")
+        logger.info("Client disconnected", extra={"client": websocket.client})
     except asyncio.TimeoutError:
         await manager.send_status(websocket, "timeout", "Conexión expirada")
     except Exception as e:
         error_message = str(e)
-        print(f"Error: {error_message}")
+        logger.error("An error occurred", extra={"error": error_message, "client": websocket.client})
         await manager.send_status(websocket, "error", error_message)
     finally:
-        # Limpieza
-        interpreter.reset()
+        # Limpieza centralizada a través del manager
         manager.disconnect(websocket)
-        print("Conexión cerrada y estado del intérprete reiniciado.")
+        logger.info("Connection closed and resources released.", extra={"client": websocket.client})
 
