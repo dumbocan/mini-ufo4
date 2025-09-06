@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import { Container, Row, Col, Form, Button, Spinner, ToastContainer, Toast } from 'react-bootstrap';
@@ -9,9 +9,8 @@ import 'prismjs/components/prism-javascript';
 import 'prismjs/components/prism-python';
 import 'prismjs/themes/prism.css';
 
-import { Terminal } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import 'xterm/css/xterm.css';
+import XTerm from './Terminal';
+import '@xterm/xterm/css/xterm.css';
 
 const WS_URL = 'ws://localhost:8000/ws';
 
@@ -25,34 +24,10 @@ function App() {
 
   const socket = useRef(null);
   const reconnectTimer = useRef(null);
+  const terminalRef = useRef(null);
 
   const currentMessageBuffer = useRef(''); // Buffer para chunks tipo 'message'
   const currentCodeBuffer = useRef('');     // Buffer para chunks tipo 'code'
-
-  const termRef = useRef(null);          // Contenedor DOM de xterm
-  const xtermInstance = useRef(null);    // Instancia de xterm
-  const fitAddonRef = useRef(null);      // Fit addon
-  const resizeObserverRef = useRef(null);// ResizeObserver del contenedor
-
-  // Ajuste seguro: evita llamar a fit si el terminal no está listo o sin tamaño
-  const safeFit = useCallback(() => {
-    const term = xtermInstance.current;
-    const fitAddon = fitAddonRef.current;
-    if (!term || !fitAddon) return;
-
-    const el = term.element;
-    if (!el || !el.isConnected) return;
-
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-
-    try {
-      fitAddon.fit();
-      term.refresh(0, term.rows - 1);
-    } catch {
-      // no-op
-    }
-  }, []);
 
   const connectWebSocket = () => {
     console.log('Attempting to connect WebSocket...');
@@ -60,8 +35,8 @@ function App() {
 
     socket.current.onopen = () => {
       console.log('WebSocket connected');
-      if (xtermInstance.current) {
-        xtermInstance.current.write('Connected to backend.\n');
+      if (terminalRef.current) {
+        terminalRef.current.write('Connected to backend.\n');
       }
       setIsConnected(true);
       setToast({ show: true, message: 'Connected to backend.', type: 'success' });
@@ -77,8 +52,8 @@ function App() {
       const message = JSON.parse(event.data);
 
       const writeToTerm = (text, colorCode = '') => {
-        if (xtermInstance.current) {
-          xtermInstance.current.write(`${colorCode}${text}\x1b[0m`);
+        if (terminalRef.current) {
+          terminalRef.current.write(`${colorCode}${text}\x1b[0m`);
         }
       };
 
@@ -137,8 +112,8 @@ function App() {
 
     socket.current.onclose = () => {
       console.log('WebSocket disconnected');
-      if (xtermInstance.current) {
-        xtermInstance.current.write('Disconnected from backend. Attempting to reconnect...\n');
+      if (terminalRef.current) {
+        terminalRef.current.write('Disconnected from backend. Attempting to reconnect...\n');
       }
       setIsConnected(false);
       setIsLoading(false);
@@ -153,65 +128,12 @@ function App() {
 
     socket.current.onerror = (error) => {
       console.error('WebSocket error:', error);
-      if (xtermInstance.current) {
-        xtermInstance.current.write('WebSocket connection error.\n');
+      if (terminalRef.current) {
+        terminalRef.current.write('WebSocket connection error.\n');
       }
       setToast({ show: true, message: 'WebSocket connection error.', type: 'danger' });
     };
   };
-
-  useEffect(() => {
-    // Inicializa xterm cuando haya contenedor
-    if (termRef.current && !xtermInstance.current) {
-      const term = new Terminal({
-        convertEol: true,
-        fontFamily: '"Fira Code", "Fira Mono", monospace',
-        fontSize: 12,
-        theme: {
-          background: '#212529',
-          foreground: '#f8f9fa',
-        }
-      });
-
-      const fitAddon = new FitAddon();
-      fitAddonRef.current = fitAddon;
-      term.loadAddon(fitAddon);
-      term.open(termRef.current);
-      xtermInstance.current = term;
-
-      // Esperar a que el layout se estabilice antes del fit
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          safeFit();
-        });
-      });
-
-      // Observa cambios de tamaño del contenedor
-      resizeObserverRef.current = new ResizeObserver(() => {
-        safeFit();
-      });
-      try {
-        resizeObserverRef.current.observe(termRef.current);
-      } catch {
-        // no-op
-      }
-    }
-    // Cleanup
-    return () => {
-      try {
-        if (resizeObserverRef.current && termRef.current) {
-          resizeObserverRef.current.unobserve(termRef.current);
-        }
-      } catch {}
-      resizeObserverRef.current = null;
-
-      if (xtermInstance.current) {
-        try { xtermInstance.current.dispose(); } catch {}
-        xtermInstance.current = null;
-      }
-      fitAddonRef.current = null;
-    };
-  }, [safeFit]);
 
   useEffect(() => {
     connectWebSocket();
@@ -235,15 +157,15 @@ function App() {
 
   const handleGenerate = () => {
     if (!prompt || !socket.current || socket.current.readyState !== WebSocket.OPEN) {
-      if (xtermInstance.current) {
-        xtermInstance.current.write('Please enter a prompt and ensure you are connected to the backend.\n');
+      if (terminalRef.current) {
+        terminalRef.current.write('Please enter a prompt and ensure you are connected to the backend.\n');
       }
       setToast({ show: true, message: 'Please enter a prompt and ensure you are connected to the backend.', type: 'danger' });
       return;
     }
     setIsLoading(true);
-    if (xtermInstance.current) {
-      xtermInstance.current.clear(); // Limpiar consola
+    if (terminalRef.current) {
+      terminalRef.current.clear(); // Limpiar consola
     }
     setCode(''); // Limpiar código
     currentMessageBuffer.current = '';
@@ -266,22 +188,9 @@ function App() {
   };
 
   const handleSaveSession = async () => {
-    // Leer el buffer de xterm de forma segura
     let console_output = '';
-    if (xtermInstance.current) {
-      try {
-        const buffer = xtermInstance.current.buffer.active;
-        const lines = [];
-        for (let i = 0; i < buffer.length; i++) {
-          const line = buffer.getLine(i);
-          if (line) {
-            lines.push(line.translateToString(true));
-          }
-        }
-        console_output = lines.join('\n');
-      } catch (e) {
-        console.warn('Could not read xterm buffer:', e);
-      }
+    if (terminalRef.current) {
+      console_output = terminalRef.current.getBuffer();
     }
 
     const sessionContent = {
@@ -301,8 +210,8 @@ function App() {
       }
       const newProject = await response.json();
       fetchProjects();
-      if (xtermInstance.current) {
-        xtermInstance.current.write(`Session saved as: ${newProject.name}\n`);
+      if (terminalRef.current) {
+        terminalRef.current.write(`Session saved as: ${newProject.name}\n`);
       }
       setToast({ show: true, message: `Session saved as: ${newProject.name}`, type: 'success' });
     } catch (error) {
@@ -320,13 +229,12 @@ function App() {
       setPrompt(projectContent.prompt || '');
       setCode(projectContent.code || '');
 
-      if (xtermInstance.current) {
-        xtermInstance.current.clear();
-        safeFit(); // por si el layout cambió
+      if (terminalRef.current) {
+        terminalRef.current.clear();
         if (projectContent.console_output) {
-          xtermInstance.current.write(`${projectContent.console_output}\n`);
+          terminalRef.current.write(`${projectContent.console_output}\n`);
         }
-        xtermInstance.current.write(`Session loaded: ${projectId}\n`);
+        terminalRef.current.write(`Session loaded: ${projectId}\n`);
       }
 
       setToast({ show: true, message: `Session loaded: ${projectId}`, type: 'success' });
@@ -343,8 +251,8 @@ function App() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       fetchProjects();
-      if (xtermInstance.current) {
-        xtermInstance.current.write(`Project deleted: ${projectId}\n`);
+      if (terminalRef.current) {
+        terminalRef.current.write(`Project deleted: ${projectId}\n`);
       }
       setToast({ show: true, message: `Project deleted: ${projectId}`, type: 'success' });
     } catch (error) {
@@ -430,8 +338,7 @@ function App() {
           </Form>
 
           <h5 className="mt-4">Console</h5>
-          {/* Asegurar dimensiones del contenedor */}
-          <div ref={termRef} style={{ width: '100%', height: '400px' }} />
+          <XTerm ref={terminalRef} />
 
           <h5 className="mt-4">Saved Projects</h5>
           <div
