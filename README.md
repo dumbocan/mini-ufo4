@@ -209,21 +209,26 @@ Hola Gemini. Estoy retomando el proyecto "Mini-UFO 4" que construimos juntos.
   - `backend/` (código FastAPI, Dockerfile, requirements.txt)
   - `frontend/` (código React)
   - `generated_projects/` (para proyectos generados por el agente, con logs de contexto).
-- **Problemas Resueltos (hasta ahora):**
-  - `ModuleNotFoundError` con `open-interpreter`: Se resolvió usando un `Dockerfile` robusto (Python 3.11-slim, usuario no-root, venv interno) y corrigiendo el `import` de `open_interpreter` a `interpreter`.
-  - Problemas de espacio en disco.
-  - Errores de `litellm` por proveedor/modelo incorrecto (solucionado con `deepseek/deepseek-coder` y mapeo de `DEEPSEEK_API_KEY` a `OPENAI_API_KEY`).
-  - Formato de salida de consola en el frontend: Se mejoró la legibilidad de los mensajes del agente y la salida de código/consola.
-  - Aislamiento de instancias de `interpreter` por sesión.
-  - Tests automatizados y `Makefile`.
-  - Refuerzo de seguridad con límites de recursos Docker y modo seguro de `open-interpreter`.
-  - Mejoras en la resiliencia del frontend (reconexión, heartbeats, indicador de estado).
-  - Gestión de proyectos (guardar/cargar/eliminar).
-  - Logging estructurado en el backend.
-  - Integración CI simple con GitHub Actions.
-  - **¡Importante!** Se han resuelto los errores de compilación y runtime del frontend relacionados con `xterm.js` y el manejo de cadenas de texto. El frontend ahora debería funcionar correctamente.
-  - **¡Novedad!** Se ha implementado un modo oscuro en el frontend.
-  - **¡Novedad!** Se ha realizado una limpieza exhaustiva de archivos y carpetas innecesarias en el proyecto.
+
+**Problemas Resueltos (hasta ahora):**
+- `ModuleNotFoundError` con `open-interpreter`: Se resolvió usando un `Dockerfile` robusto (Python 3.11-slim, usuario no-root, venv interno) y corrigiendo el `import` de `open_interpreter` a `interpreter`.
+- Problemas de espacio en disco.
+- Errores de `litellm` por proveedor/modelo incorrecto (solucionado con `deepseek/deepseek-coder` y mapeo de `DEEPSEEK_API_KEY` a `OPENAI_API_KEY`).
+- Formato de salida de consola en el frontend: Se mejoró la legibilidad de los mensajes del agente y la salida de código/consola.
+- Aislamiento de instancias de `interpreter` por sesión.
+- Tests automatizados y `Makefile`.
+- Refuerzo de seguridad con límites de recursos Docker y modo seguro de `open-interpreter`.
+- Mejoras en la resiliencia del frontend (reconexión, heartbeats, indicador de estado).
+- Gestión de proyectos (guardar/cargar/eliminar).
+- Logging estructurado en el backend.
+- Integración CI simple con GitHub Actions.
+- **¡Importante!** Se han resuelto los errores de compilación y runtime del frontend relacionados con `xterm.js` y el manejo de cadenas de texto. El frontend ahora debería funcionar correctamente.
+- **¡Novedad!** Se ha implementado un modo oscuro en el frontend.
+- **¡Novedad!** Se ha realizado una limpieza exhaustiva de archivos y carpetas innecesarias en el proyecto.
+- **¡Novedad!** Se han resuelto las advertencias de React en `App.js` y `Terminal.js`.
+- **¡Novedad!** Se ha implementado el diseño de paneles de UI (Fase 1) con una barra lateral de proyectos y un área principal reestructurada.
+- **¡Novedad!** Se ha implementado la visualización del árbol de archivos de proyectos en el frontend, con correcciones de enrutamiento en el backend.
+- **¡Novedad!** Se ha corregido la persistencia de proyectos en disco mediante el montaje de volumen de Docker.
 
 **Mi forma de programar:**
 - Prefiero soluciones robustas y seguras (Docker, entornos aislados).
@@ -231,9 +236,100 @@ Hola Gemini. Estoy retomando el proyecto "Mini-UFO 4" que construimos juntos.
 - Valoro la legibilidad del código y la organización del proyecto.
 
 **Lo que te pido:**
-Por favor, asume el rol de mi asistente de ingeniería de software para este proyecto. Estamos en un buen punto. Las próximas tareas son:
-1.  **Resolver las advertencias de React** en `App.js` y `Terminal.js` (relacionadas con dependencias de `useEffect` y manejo de `ref`).
-2.  **Implementar el nuevo diseño de paneles de UI** que discutimos, inspirándonos en Replit (barra lateral izquierda para proyectos, área principal dividida verticalmente para prompt, editor de código y consola).
+Por favor, asume el rol de mi asistente de ingeniería de software para este proyecto. Estamos en un excelente punto. Las próximas tareas prioritarias son:
+1.  **Implementar la Funcionalidad de Reproducir/Eliminar en el Árbol de Archivos (Fase 2 del Árbol de Archivos):** Conectar los iconos de "play" y "papelera" en el árbol de archivos para que el botón de "play" ejecute el código del proyecto (enviando el prompt al agente) y el botón de "papelera" elimine el proyecto del disco.
+2.  **Implementar la Pantalla de Salida Dedicada (Fase 2 del Rediseño de UI):** Crear el área grande y dedicada en la interfaz para mostrar la salida gráfica o la renderización de páginas web, como se discutió previamente. Esto implicará modificar el backend para enviar este tipo de salida y el frontend para renderizarla.
+
+¿Estás listo para continuar con estas tareas?
+```
+
+## mini-ufo4.5 — Resumen de la sesión de trabajo (Día 5)
+
+En esta sesión, nos hemos centrado en mejorar la interfaz de usuario del frontend y la persistencia de los proyectos.
+
+**Logros Clave de la Sesión:**
+
+*   **Resolución de Advertencias de React:**
+    *   Se corrigieron las advertencias de `useEffect` relacionadas con dependencias faltantes en `App.js` (envolviendo `connectWebSocket` y `fetchProjectMetadata` en `useCallback`).
+    *   Se resolvió la advertencia de `ref` en `Terminal.js` capturando el valor de `termRef.current` en una variable local para la función de limpieza.
+*   **Implementación del Diseño de Paneles de UI (Fase 1):**
+    *   Se reestructuró el layout de `App.js` para incluir una barra lateral izquierda dedicada a los proyectos, y un área principal dividida verticalmente para la entrada del prompt, el editor de código y la consola.
+    *   Se añadió el CSS correspondiente en `App.css` para estilizar el nuevo diseño de paneles.
+*   **Visualización del Árbol de Archivos de Proyectos (Fase 1 - Frontend y Backend API):**
+    *   **Backend:** Se añadió un nuevo endpoint `GET /projects/tree` a `backend/routers/projects.py` para devolver la estructura jerárquica del directorio `generated_projects/`.
+    *   **Backend - Corrección Crítica de Enrutamiento:** Se identificó y corrigió un problema de enrutamiento en FastAPI donde el endpoint `/projects/tree` era incorrectamente interpretado como un `project_id`. La solución fue reordenar las rutas en `backend/routers/projects.py` para que las rutas literales (como `/tree`) se definan antes que las rutas con parámetros (como `/{project_id}`).
+    *   **Frontend:** Se creó un nuevo componente `frontend/src/FileTree.js` para renderizar de forma recursiva la estructura del árbol de archivos en la barra lateral izquierda.
+    *   **Frontend:** Se modificó `frontend/src/App.js` para consumir el nuevo endpoint `/projects/tree`, almacenar los datos del árbol en un nuevo estado (`fileTreeData`), e integrar el componente `FileTree`.
+    *   **Frontend - Corrección de Dependencia:** Se instaló la dependencia `react-icons` (`npm install react-icons`) que era necesaria para los iconos del árbol de archivos y estaba causando un error de "Module not found".
+*   **Persistencia de Proyectos en Disco (Corrección de Docker):**
+    *   Se identificó que los proyectos guardados no eran persistentes en el host debido a que el directorio `generated_projects` dentro del contenedor Docker no estaba montado en el sistema de archivos del host.
+    *   **Solución:** Se modificó el comando `docker run` para incluir un montaje de volumen (`-v /home/micasa/mini-ufo4/backend/generated_projects:/home/appuser/app/generated_projects`) asegurando que los proyectos se guarden y persistan correctamente en el disco del host.
+
+**Desafíos y Lecciones Aprendidas:**
+
+*   **Depuración de Advertencias de React:** Aunque las advertencias de `useEffect` y `ref` no causaban fallos directos, su resolución mejora la robustez y mantenibilidad del código. La depuración requirió un análisis cuidadoso de las dependencias de los hooks.
+*   **Errores de Enrutamiento en FastAPI:** El problema del 404 para `/projects/tree` fue un ejemplo clásico de cómo el orden de definición de rutas en frameworks web puede afectar el enrutamiento. Las rutas más específicas (literales) deben definirse antes que las rutas más generales (con parámetros de ruta) para evitar coincidencias incorrectas.
+*   **Persistencia de Datos en Docker:** La falta de persistencia de los proyectos guardados resaltó la importancia fundamental de los montajes de volumen en Docker para asegurar que los datos generados dentro de un contenedor se almacenen de forma segura y accesible en el sistema de archivos del host. Este fue un error de configuración del entorno de ejecución más que un error de código.
+
+**Estado Actual del Proyecto:**
+
+La aplicación Mini-UFO 4 es ahora mucho más robusta y funcional. El frontend presenta un nuevo diseño de paneles y un árbol de archivos interactivo para la gestión de proyectos. El backend maneja correctamente el historial de conversación y la persistencia de proyectos en disco. Las advertencias de React han sido abordadas, mejorando la calidad del código.
+
+**Próximos Pasos (Prioridades):**
+
+1.  **Implementar la Funcionalidad de Reproducir/Eliminar en el Árbol de Archivos (Fase 2 del Árbol de Archivos):** Actualmente, los iconos de "play" y "papelera" en el árbol de archivos no tienen funcionalidad completa. Necesitamos implementar la lógica en el frontend para que el botón de "play" ejecute el código del proyecto (enviando el prompt al agente) y el botón de "papelera" elimine el proyecto del disco.
+2.  **Implementar la Pantalla de Salida Dedicada (Fase 2 del Rediseño de UI):** Crear el área grande y dedicada en la interfaz para mostrar la salida gráfica o la renderización de páginas web, como se discutió previamente. Esto implicará modificar el backend para enviar este tipo de salida y el frontend para renderizarla.
+
+**Prompt para la Siguiente Sesión:**
+
+```
+Hola Gemini. Estoy retomando el proyecto "Mini-UFO 4" que construimos juntos.
+
+**Contexto del Proyecto:**
+- **Objetivo:** Crear un agente de programación web que genera, ejecuta y auto-corrige código (tipo Replit).
+- **Tecnologías Clave:**
+  - Backend: Python 3.11 (FastAPI)
+  - Frontend: React (JavaScript)
+  - Motor de Agente: `open-interpreter` (versión 0.4.0)
+  - Comunicación: WebSockets
+  - Ejecución Segura: Docker (con `python:3.11-slim`, usuario no-root `appuser`, y `venv` interno para evitar PEP 668).
+  - Modelo LLM: DeepSeek (`deepseek/deepseek-coder`).
+  - Gestión de Clave API: `DEEPSEEK_API_KEY` se mapea a `OPENAI_API_KEY` en el entorno del contenedor.
+- **Estructura de Carpetas:**
+  - `/home/micasa/mini-ufo4/` (raíz del proyecto)
+  - `backend/` (código FastAPI, Dockerfile, requirements.txt)
+  - `frontend/` (código React)
+  - `generated_projects/` (para proyectos generados por el agente, con logs de contexto).
+
+**Problemas Resueltos (hasta ahora):**
+- `ModuleNotFoundError` con `open-interpreter`: Se resolvió usando un `Dockerfile` robusto (Python 3.11-slim, usuario no-root, venv interno) y corrigiendo el `import` de `open_interpreter` a `interpreter`.
+- Problemas de espacio en disco.
+- Errores de `litellm` por proveedor/modelo incorrecto (solucionado con `deepseek/deepseek-coder` y mapeo de `DEEPSEEK_API_KEY` a `OPENAI_API_KEY`).
+- Formato de salida de consola en el frontend: Se mejoró la legibilidad de los mensajes del agente y la salida de código/consola.
+- Aislamiento de instancias de `interpreter` por sesión.
+- Tests automatizados y `Makefile`.
+- Refuerzo de seguridad con límites de recursos Docker y modo seguro de `open-interpreter`.
+- Mejoras en la resiliencia del frontend (reconexión, heartbeats, indicador de estado).
+- Gestión de proyectos (guardar/cargar/eliminar).
+- Logging estructurado en el backend.
+- Integración CI simple con GitHub Actions.
+- **¡Importante!** Se han resuelto los errores de compilación y runtime del frontend relacionados con `xterm.js` y el manejo de cadenas de texto. El frontend ahora debería funcionar correctamente.
+- **¡Novedad!** Se ha implementado un modo oscuro en el frontend.
+- **¡Novedad!** Se ha realizado una limpieza exhaustiva de archivos y carpetas innecesarias en el proyecto.
+- **¡Novedad!** Se han resuelto las advertencias de React en `App.js` y `Terminal.js`.
+- **¡Novedad!** Se ha implementado el diseño de paneles de UI (Fase 1) con una barra lateral de proyectos y un área principal reestructurada.
+- **¡Novedad!** Se ha implementado la visualización del árbol de archivos de proyectos en el frontend, con correcciones de enrutamiento en el backend.
+- **¡Novedad!** Se ha corregido la persistencia de proyectos en disco mediante el montaje de volumen de Docker.
+
+**Mi forma de programar:**
+- Prefiero soluciones robustas y seguras (Docker, entornos aislados).
+- Me gusta la retroalimentación en tiempo real en la interfaz.
+- Valoro la legibilidad del código y la organización del proyecto.
+
+**Lo que te pido:**
+Por favor, asume el rol de mi asistente de ingeniería de software para este proyecto. Estamos en un excelente punto. Las próximas tareas prioritarias son:
+1.  **Implementar la Funcionalidad de Reproducir/Eliminar en el Árbol de Archivos (Fase 2 del Árbol de Archivos):** Conectar los iconos de "play" y "papelera" en el árbol de archivos para que el botón de "play" ejecute el código del proyecto (enviando el prompt al agente) y el botón de "papelera" elimine el proyecto del disco.
+2.  **Implementar la Pantalla de Salida Dedicada (Fase 2 del Rediseño de UI):** Crear el área grande y dedicada en la interfaz para mostrar la salida gráfica o la renderización de páginas web, como se discutió previamente. Esto implicará modificar el backend para enviar este tipo de salida y el frontend para renderizarla.
 
 ¿Estás listo para continuar con estas tareas?
 ```
