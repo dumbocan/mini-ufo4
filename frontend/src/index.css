@@ -1,3 +1,27 @@
+:root {
+  --background-color: #ffffff;
+  --text-color: #212529;
+  --primary-color: #007bff;
+  --secondary-color: #6c757d;
+  --border-color: #ced4da;
+  --input-bg-color: #ffffff;
+  --input-text-color: #212529;
+  --console-bg-color: #212529; /* xterm default dark */
+  --console-text-color: #f8f9fa; /* xterm default light */
+}
+
+.dark-mode {
+  --background-color: #212529;
+  --text-color: #f8f9fa;
+  --primary-color: #66b3ff; /* Lighter blue for dark mode */
+  --secondary-color: #adb5bd; /* Lighter gray for dark mode */
+  --border-color: #495057;
+  --input-bg-color: #343a40;
+  --input-text-color: #f8f9fa;
+  --console-bg-color: #212529; /* xterm default dark */
+  --console-text-color: #f8f9fa; /* xterm default light */
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
@@ -5,6 +29,9 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: var(--background-color);
+  color: var(--text-color);
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 code {

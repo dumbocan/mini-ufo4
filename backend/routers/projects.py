@@ -24,6 +24,32 @@ class ProjectContent(BaseModel):
     code: str
     console_output: str
 
+def _get_file_tree(path: str, root_path: str):
+    tree = []
+    for item in os.listdir(path):
+        item_path = os.path.join(path, item)
+        if os.path.isdir(item_path):
+            tree.append({
+                "id": item,
+                "name": item,
+                "type": "directory",
+                "children": _get_file_tree(item_path, root_path)
+            })
+        else:
+            # Only include relevant project files
+            if item in ["prompt.txt", "code.py", "console_output.txt", "metadata.json"]:
+                tree.append({
+                    "id": item,
+                    "name": item,
+                    "type": "file"
+                })
+    return tree
+
+@router.get("/tree", response_model=List[dict])
+async def get_project_tree():
+    """Get the file tree structure of generated projects."""
+    return _get_file_tree(PROJECTS_DIR, PROJECTS_DIR)
+
 @router.get("/", response_model=List[Project])
 async def list_projects():
     """List all available projects."""

@@ -29,7 +29,9 @@ const XTerm = React.forwardRef((props, ref) => {
   }, []);
 
   useEffect(() => {
-    if (termRef.current && !xtermInstance.current) {
+    const currentTermRef = termRef.current; // Capture the ref value
+
+    if (currentTermRef && !xtermInstance.current) {
       const term = new Terminal({
         convertEol: true,
         fontFamily: '"Fira Code", "Fira Mono", monospace',
@@ -43,7 +45,7 @@ const XTerm = React.forwardRef((props, ref) => {
       const fitAddon = new FitAddon();
       fitAddonRef.current = fitAddon;
       term.loadAddon(fitAddon);
-      term.open(termRef.current);
+      term.open(currentTermRef);
       xtermInstance.current = term;
 
       requestAnimationFrame(() => {
@@ -56,14 +58,14 @@ const XTerm = React.forwardRef((props, ref) => {
         safeFit();
       });
       try {
-        resizeObserverRef.current.observe(termRef.current);
+        resizeObserverRef.current.observe(currentTermRef);
       } catch {}
     }
 
     return () => {
       try {
-        if (resizeObserverRef.current && termRef.current) {
-          resizeObserverRef.current.unobserve(termRef.current);
+        if (resizeObserverRef.current && currentTermRef) {
+          resizeObserverRef.current.unobserve(currentTermRef);
         }
       } catch {}
       resizeObserverRef.current = null;
