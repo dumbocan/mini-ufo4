@@ -5,6 +5,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import json
 from datetime import datetime
+import asyncio
+import sys
+from fastapi.responses import StreamingResponse, HTMLResponse
+import re
+import importlib.util
 
 router = APIRouter()
 
@@ -25,12 +30,19 @@ class ProjectContent(BaseModel):
     console_output: str
 
 def _get_file_tree(path: str, root_path: str):
+    """Devuelve el árbol de archivos con IDs relativos al directorio raíz.
+    Esto permite que el frontend extraiga el project_id desde el ID
+    (por ejemplo: "session-2025-09-08T12-00-00/prompt.txt").
+    """
     tree = []
     for item in os.listdir(path):
         item_path = os.path.join(path, item)
+        rel_path = os.path.relpath(item_path, root_path)
+        rel_path = rel_path.replace(os.sep, "/")  # Normalizar a separador '/'
+
         if os.path.isdir(item_path):
             tree.append({
-                "id": item,
+                "id": rel_path,
                 "name": item,
                 "type": "directory",
                 "children": _get_file_tree(item_path, root_path)
@@ -39,7 +51,7 @@ def _get_file_tree(path: str, root_path: str):
             # Only include relevant project files
             if item in ["prompt.txt", "code.py", "console_output.txt", "metadata.json"]:
                 tree.append({
-                    "id": item,
+                    "id": rel_path,
                     "name": item,
                     "type": "file"
                 })
@@ -115,10 +127,260 @@ async def create_project(content: ProjectContent, project_name: Optional[str] = 
 
 @router.delete("/{project_id}")
 async def delete_project(project_id: str):
-    """Delete a project."""
+    """Delete a project by its ID."""
     project_path = os.path.join(PROJECTS_DIR, project_id)
     if not os.path.isdir(project_path):
         raise HTTPException(status_code=404, detail="Project not found")
     
-    shutil.rmtree(project_path)
-    return {"message": "Project deleted successfully"}
+    try:
+        shutil.rmtree(project_path)
+    except Exception as e:
+        # It's good practice to log the error
+        # logger.error(f"Error deleting project '{project_id}': {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+    return {"message": f"Project '{project_id}' deleted successfully", "project_id": project_id}
+
+
+EXECUTION_TIMEOUT_SECONDS = 120
+
+@router.post("/{project_id}/execute")
+async def execute_project(project_id: str):
+    """Execute saved code.py for a project and stream its stdout/stderr as text/plain.
+    Runs inside the backend container with an execution timeout for safety.
+    """
+    project_path = os.path.join(PROJECTS_DIR, project_id)
+    code_path = os.path.join(project_path, "code.py")
+    if not os.path.isdir(project_path):
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not os.path.isfile(code_path):
+        raise HTTPException(status_code=404, detail="code.py not found")
+
+    async def streamer():
+        try:
+            # Read and sanitize code, detect inline 'pip install' directives
+            with open(code_path, "r", encoding="utf-8", errors="replace") as f:
+                raw_code = f.read()
+
+            # Find inline pip install directives (e.g., 'pip install pandas numpy')
+            pkg_matches = re.findall(r"(?i)(?:^|\s)(?:python\s+-m\s+)?pip\s+install\s+([^\n;#]+)", raw_code)
+            packages: list[str] = []
+            for m in pkg_matches:
+                parts = [p.strip() for p in m.split() if p.strip() and not p.startswith('-')]
+                packages.extend(parts)
+
+            # Remove pip install directives from code, ensuring a newline where they were
+            sanitized_code = re.sub(r"(?im)^[ \t]*!?(?:python\s+-m\s+)?pip\s+install[^\n]*\n?", "\n", raw_code)
+            sanitized_code = re.sub(r"(?i)(?:python\s+-m\s+)?pip\s+install[^\n]*", "\n", sanitized_code)
+
+            # Write sanitized code to a temporary file in project directory
+            sanitized_path = os.path.join(project_path, "__sanitized__.py")
+            with open(sanitized_path, "w", encoding="utf-8") as f:
+                f.write(sanitized_code)
+
+            start = asyncio.get_event_loop().time()
+
+            # Additionally, detect missing imports and prepare to install them
+            try:
+                import ast
+                tree = ast.parse(sanitized_code)
+                import_names: set[str] = set()
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            if alias.name:
+                                import_names.add(alias.name.split('.')[0])
+                    elif isinstance(node, ast.ImportFrom):
+                        if node.module:
+                            import_names.add(node.module.split('.')[0])
+                # Map import name to pip name where they differ
+                pip_name_map = {
+                    'sklearn': 'scikit-learn',
+                    'cv2': 'opencv-python',
+                    'yaml': 'pyyaml',
+                    'PIL': 'Pillow',
+                    'bs4': 'beautifulsoup4',
+                    'Crypto': 'pycryptodome',
+                }
+                missing: list[str] = []
+                for mod in sorted(import_names):
+                    # Skip obvious stdlib modules quickly
+                    if mod in {'sys','os','re','json','math','time','datetime','itertools','functools','subprocess','typing','pathlib','statistics','random','string','traceback','collections'}:
+                        continue
+                    if importlib.util.find_spec(mod) is None:
+                        missing.append(pip_name_map.get(mod, mod))
+            except Exception:
+                missing = []
+
+            # Union of explicitly requested packages and missing imports
+            to_install = []
+            if packages:
+                to_install.extend(packages)
+            for pkg in missing:
+                if pkg not in to_install:
+                    to_install.append(pkg)
+
+            # If packages to install, install them with pip using the same Python
+            if to_install:
+                yield "[Preparing environment] pip install: " + " ".join(packages) + "\n"
+                pip_proc = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    *to_install,
+                    cwd=project_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(pip_proc.stdout.read(1024), timeout=1.0)  # type: ignore
+                    except asyncio.TimeoutError:
+                        chunk = b""
+                    if chunk:
+                        try:
+                            yield chunk.decode("utf-8", errors="replace")
+                        except Exception:
+                            yield "\n"
+                    if pip_proc.returncode is not None:
+                        remainder = await pip_proc.stdout.read()  # type: ignore
+                        if remainder:
+                            yield remainder.decode("utf-8", errors="replace")
+                        break
+                    if asyncio.get_event_loop().time() - start > EXECUTION_TIMEOUT_SECONDS:
+                        try:
+                            pip_proc.kill()
+                        except Exception:
+                            pass
+                        yield "\n[Preparation timed out]\n"
+                        return
+
+            # Now execute the sanitized code
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "__sanitized__.py",
+                cwd=project_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env={
+                    "PYTHONUNBUFFERED": "1",
+                },
+            )
+
+            decoder = None
+            while True:
+                # Lee en trozos con pequeño timeout para poder chequear el límite global
+                try:
+                    chunk = await asyncio.wait_for(proc.stdout.read(1024), timeout=1.0)  # type: ignore
+                except asyncio.TimeoutError:
+                    chunk = b""
+
+                if chunk:
+                    # Evita problemas de decodificación parcial
+                    if decoder is None:
+                        import codecs
+                        decoder = codecs.getincrementaldecoder("utf-8")()
+                    text = decoder.decode(chunk)
+                    yield text
+
+                # Terminado
+                if proc.returncode is not None:
+                    # Vacía cualquier resto en el buffer
+                    remainder = await proc.stdout.read()  # type: ignore
+                    if remainder:
+                        if decoder is None:
+                            import codecs
+                            decoder = codecs.getincrementaldecoder("utf-8")()
+                        yield decoder.decode(remainder)
+                    break
+
+                # Chequea timeout global
+                if asyncio.get_event_loop().time() - start > EXECUTION_TIMEOUT_SECONDS:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    yield "\n[Execution timed out]\n"
+                    break
+
+            # Asegura que el proceso termine
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2)
+            except Exception:
+                pass
+            finally:
+                # Clean temp file
+                try:
+                    os.remove(sanitized_path)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            yield f"[Execution error] {e}\n"
+
+    return StreamingResponse(streamer(), media_type="text/plain; charset=utf-8")
+
+
+@router.get("/{project_id}/run", response_class=HTMLResponse)
+async def run_page(project_id: str):
+    """Simple HTML page that streams execution output in a new tab."""
+    project_path = os.path.join(PROJECTS_DIR, project_id)
+    if not os.path.isdir(project_path):
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Build the HTML without f-string interpolation to avoid brace escaping issues
+    html = r"""
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Run Project: __PID__</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: #111; color: #eee; margin: 0; }
+    header { padding: 8px 12px; background: #222; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; }
+    pre { margin: 0; padding: 12px; white-space: pre-wrap; word-wrap: break-word; }
+    .btn { background:#2d6cdf; color:#fff; border:none; padding:8px 12px; border-radius:6px; cursor:pointer; }
+    .btn:disabled { opacity:.6; cursor: not-allowed; }
+  </style>
+  <script>
+    async function runProject() {
+      const btn = document.getElementById('runbtn');
+      const out = document.getElementById('out');
+      btn.disabled = true;
+      out.textContent = '';
+      try {
+        const resp = await fetch('/projects/__PID__/execute', { method: 'POST' });
+        if (!resp.ok) {
+          out.textContent = 'Error: ' + resp.status + ' ' + resp.statusText;
+          btn.disabled = false;
+          return;
+        }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+          const r = await reader.read();
+          if (r.done) break;
+          out.textContent += decoder.decode(r.value);
+          window.scrollTo(0, document.body.scrollHeight);
+        }
+      } catch (e) {
+        out.textContent += '\n[Client error] ' + e;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    window.addEventListener('load', runProject);
+  </script>
+</head>
+<body>
+  <header>
+    <div>Running project: __PID__</div>
+    <button id="runbtn" class="btn" onclick="runProject()">Run again</button>
+  </header>
+  <pre id="out">Starting...
+</pre>
+</body>
+</html>
+"""
+    return HTMLResponse(content=html.replace("__PID__", project_id))

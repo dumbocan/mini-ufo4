@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import { Container, Row, Col, Form, Button, Spinner, ToastContainer, Toast, Dropdown } from 'react-bootstrap';
-import { House } from 'react-bootstrap-icons';
+import { House, PlayFill, TrashFill } from 'react-bootstrap-icons';
 import Editor from 'react-simple-code-editor';
 import { highlight, languages } from 'prismjs/components/prism-core';
 import 'prismjs/components/prism-clike';
@@ -44,6 +44,7 @@ function App() {
   // Buffers
   const currentMessageBuffer = useRef('');
   const currentCodeBuffer = useRef('');
+  const lastPromptRef = useRef(''); // New ref to store the last prompt
 
   // Tema
   useEffect(() => {
@@ -105,7 +106,7 @@ function App() {
       }
     };
 
-    socket.current.onmessage = (event) => {
+    socket.current.onmessage = async (event) => {
       const message = JSON.parse(event.data);
 
       const writeToTerm = (text, colorCode = '') => {
@@ -125,16 +126,42 @@ function App() {
         if (currentCodeBuffer.current) {
           writeToTerm('\n\x1b[36m--- CODE ---\x1b[0m\n'); // cyan
           writeToTerm(currentCodeBuffer.current + '\n');
-          currentCodeBuffer.current = '';
         }
       };
 
       if (message.end_of_stream) {
         flushMessageBuffer();
-        flushCodeBuffer();
+        // Don't flush code buffer here yet.
         setIsLoading(false);
         writeToTerm('\n\x1b[32mTask finished.\x1b[0m\n'); // green
         setToast({ show: true, message: 'Task finished.', type: 'success' });
+
+        // Capture console output before clearing terminal
+        let console_output = '';
+        if (terminalRef.current && typeof terminalRef.current.getBuffer === 'function') {
+          try {
+            console_output = terminalRef.current.getBuffer();
+          } catch (e) {
+            console.warn('Could not read terminal buffer:', e);
+          }
+        }
+
+        // Automatically save and load the new project
+        console.log('DEBUG: Values before handleSaveSession:');
+        console.log('  lastPromptRef.current:', lastPromptRef.current);
+        console.log('  currentCodeBuffer.current:', currentCodeBuffer.current);
+        console.log('  console_output:', console_output);
+        const newProject = await handleSaveSession(lastPromptRef.current, currentCodeBuffer.current, console_output);
+        if (newProject) {
+          handleLoadSession(newProject);
+          // Refresh project metadata and file tree after saving a new project
+          await fetchProjectMetadata();
+          await fetchFileTree();
+        }
+
+        // Now flush the code buffer and clear the terminal
+        flushCodeBuffer(); // This will clear currentCodeBuffer.current
+        if (terminalRef.current) terminalRef.current.clear(); // Clear terminal after saving its content
         return;
       }
 
@@ -148,7 +175,6 @@ function App() {
       }
 
       if (message.type === 'message' && message.content) {
-        flushCodeBuffer();
         currentMessageBuffer.current += message.content;
       } else if (message.type === 'code' && message.content) {
         flushMessageBuffer();
@@ -156,7 +182,6 @@ function App() {
         setCode(prev => prev + message.content);
       } else if (message.type === 'console' && message.content) {
         flushMessageBuffer();
-        flushCodeBuffer();
         writeToTerm('\n\x1b[33m--- OUTPUT ---\x1b[0m\n'); // yellow
         writeToTerm(message.content + '\n');
       } else if (message.type === 'status' && message.content) {
@@ -209,28 +234,24 @@ function App() {
     } else {
       setIsLoading(true);
       if (terminalRef.current) terminalRef.current.clear();
-      setCode('');
       currentMessageBuffer.current = '';
       currentCodeBuffer.current = '';
+      console.log('Prompt before sending to WS:', prompt);
+      lastPromptRef.current = prompt; // Store the prompt in the ref
       socket.current.send(prompt);
     }
   };
 
-  const handleSaveSession = async () => {
-    let console_output = '';
-    if (terminalRef.current && typeof terminalRef.current.getBuffer === 'function') {
-      try {
-        console_output = terminalRef.current.getBuffer();
-      } catch (e) {
-        console.warn('Could not read terminal buffer:', e);
-      }
-    }
-
+  const handleSaveSession = async (currentPrompt, generatedCode, consoleOutput) => {
     const sessionContent = {
-      prompt,
-      code,
-      console_output
+      prompt: currentPrompt,
+      code: generatedCode,
+      console_output: consoleOutput
     };
+
+    console.log('Saving session with prompt:', currentPrompt);
+    console.log('Saving session with code:', generatedCode);
+    console.log('Saving session with console_output:', consoleOutput);
 
     try {
       const res = await fetch('/projects', {
@@ -240,10 +261,11 @@ function App() {
       });
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const newProject = await res.json();
-      await fetchProjectMetadata();
-      await fetchFileTree();
+      // fetchProjectMetadata and fetchFileTree are already called in onopen and after save.
+      // No need to call them here again, as handleLoadSession will trigger them.
       if (terminalRef.current) terminalRef.current.write(`Session saved as: ${newProject.name}\n`);
       setToast({ show: true, message: `Session saved as: ${newProject.name}`, type: 'success' });
+      return newProject;
     } catch (error) {
       console.error('Error saving session:', error);
       setToast({ show: true, message: `Error saving session: ${error.message}`, type: 'danger' });
@@ -287,23 +309,25 @@ function App() {
     }
   };
 
-  const handleDeleteProject = async (item) => {
-    let projectId = item.id;
-    if (item.type === 'file') {
-      const parts = String(item.id).split('/');
-      projectId = parts[0];
+  const handleDeleteProject = async (projectId) => {
+    if (!window.confirm(`Are you sure you want to delete project "${projectId}"?`)) {
+      return;
     }
-
     try {
       const res = await fetch(`/projects/${projectId}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      const data = await res.json();
+
       await fetchProjectMetadata();
       await fetchFileTree();
-      if (terminalRef.current) terminalRef.current.write(`Project deleted: ${projectId}\n`);
-      setToast({ show: true, message: `Project deleted: ${projectId}`, type: 'success' });
+
+      if (terminalRef.current) terminalRef.current.write(`Project deleted: ${data.project_id}\n`);
+      setToast({ show: true, message: `Project deleted: ${data.project_id}`, type: 'success' });
 
       // Si estabas en ese proyecto, vuelve a Home
-      if (currentProject?.id === projectId) {
+      if (currentProject?.id === data.project_id) {
+        setPrompt('');
+        setCode('');
         setCurrentProject(null);
         setCurrentView('home');
       }
@@ -313,39 +337,29 @@ function App() {
     }
   };
 
-  const handlePlayProject = async (item) => {
+  const handlePlayProject = async (project) => {
+    // Primero, cargamos la sesión para asegurarnos de que el prompt y el código están en el estado
+    await handleLoadSession(project);
+
+    // handleGenerate usará el prompt del estado, que acabamos de cargar.
+    // Usamos un pequeño timeout para asegurar que el estado de React se haya actualizado
+    // antes de llamar a handleGenerate.
+    setTimeout(() => {
+      if (prompt) { // Verificamos que el prompt se haya cargado
+        handleGenerate();
+      }
+    }, 0);
+  };
+
+  const handleExecuteProject = (item) => {
+    // Abre una nueva pestaña apuntando a la página de ejecución del backend
     let projectId = item.id;
     if (item.type === 'file') {
       const parts = String(item.id).split('/');
       projectId = parts[0];
     }
-
-    try {
-      const res = await fetch(`/projects/${projectId}`);
-      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-      const projectContent = await res.json();
-
-      setPrompt(projectContent.prompt || '');
-      setCode(projectContent.code || '');
-
-      if (terminalRef.current) {
-        terminalRef.current.clear();
-        terminalRef.current.write(`Loading code from ${item.name} for execution...\n`);
-      }
-      setToast({ show: true, message: `Loading code from ${item.name} for execution.`, type: 'info' });
-
-      // Send the code to the backend for execution
-      if (socket.current && socket.current.readyState === WebSocket.OPEN) {
-        setIsLoading(true);
-        socket.current.send(projectContent.code);
-      } else {
-        setToast({ show: true, message: 'WebSocket not connected. Cannot execute code.', type: 'danger' });
-      }
-
-    } catch (error) {
-      console.error('Error playing project:', error);
-      setToast({ show: true, message: `Error playing project: ${error.message}`, type: 'danger' });
-    }
+    const url = `http://localhost:8000/projects/${projectId}/run`;
+    window.open(url, '_blank', 'noopener');
   };
 
   const handleLoadProject = (p) => {
@@ -420,6 +434,7 @@ function App() {
           fileTreeData={fileTreeData}
           handleLoadSession={handleLoadSession}
           handlePlayProject={handlePlayProject}
+          handleExecuteProject={handleExecuteProject}
           handleDeleteProject={handleDeleteProject}
         />
       ) : (
@@ -435,6 +450,7 @@ function App() {
           fileTreeData={fileTreeData}
           handleLoadSession={handleLoadSession}
           handlePlayProject={handlePlayProject}
+          handleExecuteProject={handleExecuteProject}
           handleDeleteProject={handleDeleteProject}
           currentProject={currentProject}
           editorStyle={editorStyle}

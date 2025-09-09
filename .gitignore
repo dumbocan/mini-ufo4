@@ -29,3 +29,7 @@ build/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Project specific
+backend/generated_projects/
+backend/test_venv/

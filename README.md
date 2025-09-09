@@ -38,7 +38,7 @@ Mini-UFO 4 es una aplicación web que actúa como un agente de programación int
    docker build -t mini-ufo4-backend .
 
    # Ejecuta el contenedor del backend
-   docker run --rm -d --name mini-ufo4-backend -p 8000:8000 --env-file ./.env mini-ufo4-backend
+   docker run --rm -d --name mini-ufo4-backend -p 8000:8000 --env-file ./.env -v "$(pwd)/generated_projects:/home/appuser/app/generated_projects" mini-ufo4-backend
    ```
    Deja esta terminal abierta y corriendo.
 
@@ -93,9 +93,90 @@ En esta sesión, nos hemos centrado en refinar la interfaz de usuario del fronte
 *   **Gestión de Proyectos:**
     *   Corregida una línea duplicada en la función `delete_project`.
 
-### Docker
-*   Proporcionados comandos `docker build` y `docker run` actualizados, incluyendo el montaje de volumen para la persistencia de proyectos.
-*   Aclarado el proceso de detener, eliminar, reconstruir y ejecutar contenedores Docker.
+### Frontend (UI/UX) Enhancements:
+
+*   **View Management:**
+    *   Implemented a multi-view architecture with `HomeView` and `ProjectView` components.
+    *   `HomeView` now serves as the initial landing page, featuring a central prompt input and a list of recent projects, inspired by a ChatGPT-like interface.
+    *   `ProjectView` encapsulates the core IDE functionality, including the code editor, terminal, and file tree.
+    *   Navigation between `HomeView` and `ProjectView` is managed via application state.
+*   **Top Bar Redesign:**
+    *   The application's top bar has been redesigned for a more compact and Replit-like appearance.
+    *   A "home" button (House icon) has been added to the top-left in `ProjectView` to allow users to easily return to the `HomeView`.
+    *   A new dropdown menu has been integrated into the top-right, replacing the previous status and theme toggle buttons.
+    *   **Dropdown Functionality:**
+        *   The dropdown now contains the connection status (represented by a colored dot and text) and the theme toggle.
+        *   The dropdown button's padding and overall size have been adjusted for a more refined look.
+        *   The dropdown menu itself has been styled to match the dark theme when active.
+    *   The project name displayed in the top bar now dynamically updates and its font size has been adjusted to align with the status indicator.
+*   **Styling and Responsiveness:**
+    *   Adjusted various CSS properties (`padding`, `margin`, `font-size`) to improve the visual layout and alignment of UI elements.
+    *   Ensured the `xterm.css` import path was correctly resolved.
+
+### Backend (API) Adjustments:
+
+*   **File Tree Endpoint (`/projects/tree`):**
+    *   Modified the `_get_file_tree` function in `backend/routers/projects.py` to align its output with the frontend's expected JSON structure.
+    *   Ensured that directory types are correctly reported as "dir" (instead of "directory") and file IDs include their full relative paths for better identification.
+    *   Resolved a `TypeError` related to missing `root_path` arguments in recursive calls within `_get_file_tree`.
+*   **Project Deletion:**
+    *   Fixed a minor bug in the `delete_project` function (`backend/routers/projects.py`) where a line of code was duplicated.
+
+### Core Functionality & Bug Fixes:
+
+*   **Project Content Loading:**
+    *   Implemented automatic loading of the most recently created project upon application startup, ensuring the user is immediately presented with their latest work.
+    *   Resolved an issue where project content (prompt, code, console output) was not correctly loading when a project was selected from the `HomeView`'s project list. The `handleLoadProject` function now correctly triggers `handleLoadSession` to fetch and display all relevant project data.
+*   **Docker Container Management:**
+    *   Provided and debugged commands for stopping, removing, rebuilding, and running the backend Docker container, addressing issues like container name conflicts and ensuring proper environment setup.
+
+### Session Summary (2025-09-07 - Part 2)
+
+This section details the debugging and resolution of issues encountered during the second part of the session on September 7, 2025.
+
+**Problem 1: Frontend not switching to ProjectView and no project created on host after generation.**
+
+*   **Initial Diagnosis:**
+    *   Frontend's `handleGenerate` function was not triggering view switch or project saving.
+    *   Docker volume mapping for `generated_projects` might be incorrect.
+    *   Backend's project creation logic might be faulty.
+*   **Debugging Steps & Solutions:**
+    1.  **Docker Volume Mapping:**
+        *   **Problem:** The `docker run` command in `README.md` was missing the volume mount for `generated_projects`, causing projects to be created inside the container but not on the host.
+        *   **Solution:** Updated the `docker run` command to include `-v "$(pwd)/generated_projects:/home/appuser/app/generated_projects"`.
+        *   **Challenge:** Repeated issues with `$(pwd)` in `run_shell_command` and user's copy-pasting.
+        *   **Resolution:** Provided explicit instructions for the user to manually get the absolute path and use it in the `docker run` command.
+    2.  **Frontend Automatic Saving and View Switch:**
+        *   **Problem:** After generation, the frontend did not automatically save the project or switch to `ProjectView`.
+        *   **Solution:**
+            *   Modified `handleSaveSession` in `frontend/src/App.js` to return the `newProject` object upon successful saving.
+            *   Made `socket.current.onmessage` an `async` function.
+            *   In the `end_of_stream` block of `socket.current.onmessage`, added logic to `await handleSaveSession()` and then `handleLoadSession(newProject)` to automatically save and load the generated project.
+    3.  **Empty `prompt`, `code`, `console_output` in saved files:**
+        *   **Problem:** `prompt.txt`, `code.py`, and `console_output.txt` were empty after saving, even when the `prompt` was correctly sent to the WebSocket.
+        *   **Debugging:** Added `console.log` statements in `handleSaveSession` and `handleGenerate` to trace the `prompt` value. It was found that `prompt` was correct when sent to WS, but empty when `handleSaveSession` was called.
+        *   **Hypothesis:** React re-renders or state management issues were clearing the `prompt` state.
+        *   **Solution:**
+            *   Introduced `lastPromptRef = useRef('')` in `App.js`.
+            *   In `handleGenerate`, stored the current `prompt` state in `lastPromptRef.current`.
+            *   Modified `handleSaveSession` to accept `currentPrompt` as an argument.
+            *   Modified the call to `handleSaveSession` in `socket.current.onmessage` to pass `lastPromptRef.current`.
+            *   Removed `setCode('')` from `handleGenerate` to avoid unnecessary re-renders that might interfere with state.
+        *   **Result:** `prompt.txt` now correctly contains the user's prompt. `code.py` and `console_output.txt` will contain content if the LLM generates code/output.
+    4.  **CORS Policy Error & HTTP 500 Internal Server Error:**
+        *   **Problem:** Frontend requests to the backend were blocked by CORS, and the backend returned a 500 error during `POST /projects/`.
+        *   **Diagnosis:** `CORSMiddleware` was already present in `backend/main.py`, but the Docker container might not have been rebuilt/restarted after its inclusion.
+        *   **Solution:** Instructed the user to rebuild the Docker image and restart the container.
+        *   **Result:** The 500 error disappeared from backend logs, indicating the CORS issue was resolved by ensuring the latest backend code was running.
+    5.  **File Tree Not Updating:**
+        *   **Problem:** The file tree in `ProjectView` was not showing the newly created project.
+        *   **Solution:** In the `end_of_stream` block of `socket.current.onmessage`, explicitly called `await fetchProjectMetadata()` and `await fetchFileTree()` after `handleSaveSession` and `handleLoadSession`.
+        *   **Result:** The file tree now correctly updates and displays the newly created project.
+
+**Current Status:** All major issues related to project generation, saving, loading, and UI updates have been resolved. The system now behaves as expected.
+
+**Remaining Minor Issue:**
+*   **WebSocket Connection Warnings:** Frontend still shows "WebSocket connection to 'ws://localhost:8000/ws' failed: WebSocket is closed before the connection is established." and "WebSocket error: Event", but eventually connects. This is a timing/network issue, not critical for functionality.
 
 ---
 

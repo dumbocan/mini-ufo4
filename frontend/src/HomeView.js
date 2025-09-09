@@ -1,5 +1,6 @@
 import React from 'react';
 import { Container, Row, Col, Form, Button, Spinner } from 'react-bootstrap';
+import FileTree from './FileTree';
 
 function HomeView({
   prompt,
@@ -8,6 +9,8 @@ function HomeView({
   isLoading,
   projects,
   handleLoadProject,
+  handleExecuteProject,
+  handlePlayProject,
   handleDeleteProject
 }) {
   return (
@@ -57,17 +60,12 @@ function HomeView({
           {projects.length === 0 ? (
             <p className="text-muted">No saved projects yet.</p>
           ) : (
-            <ul className="list-unstyled">
-              {projects.map(p => (
-                <li key={p.id} className="d-flex justify-content-between align-items-center mb-2">
-                  <span>{p.name} ({new Date(p.created_at).toLocaleString()})</span>
-                  <div>
-                    <Button size="sm" variant="secondary" className="me-2" onClick={() => handleLoadProject(p)}>Open</Button>
-                    <Button size="sm" variant="danger" onClick={() => handleDeleteProject({ id: p.id, type: 'dir', name: p.name })}>Delete</Button>
-                  </div>
-                </li>
-              ))}
-            </ul>
+            <FileTree
+              tree={projects.map(p => ({ id: p.id, name: p.name, type: 'directory', created_at: p.created_at }))}
+              onOpen={handleLoadProject}
+              onRun={handleExecuteProject}
+              onDelete={handleDeleteProject}
+            />
           )}
         </Col>
       </Row>

@@ -22,6 +22,7 @@ function ProjectView({
   fileTreeData,
   handleLoadSession,
   handlePlayProject,
+  handleExecuteProject,
   handleDeleteProject,
   currentProject,
   editorStyle
@@ -63,7 +64,13 @@ function ProjectView({
             </Button>
             <Button
               variant="success"
-              onClick={handleSaveSession}
+              onClick={() => handleSaveSession(
+                prompt,
+                code,
+                (terminalRef?.current && typeof terminalRef.current.getBuffer === 'function')
+                  ? terminalRef.current.getBuffer()
+                  : ''
+              )}
               disabled={isLoading}
             >
               Save Session
@@ -74,7 +81,7 @@ function ProjectView({
           <FileTree
             tree={fileTreeData}
             onOpen={handleLoadSession}
-            onRun={handlePlayProject}
+            onRun={handleExecuteProject}
             onDelete={handleDeleteProject}
           />
         </Col>

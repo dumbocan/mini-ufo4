@@ -6,7 +6,7 @@ const FileTree = ({ tree, onOpen, onRun, onDelete }) => {
   return (
     <ul className="list-unstyled file-tree-list">
       {tree.map((item) => (
-        <li key={item.id || item.name} className="file-tree-item">
+        <li key={item.id} className="file-tree-item">
           <div className="d-flex align-items-center justify-content-between">
             <span
               className={`d-flex align-items-center ${item.type === 'directory' ? 'folder-name' : 'file-name'}`}
@@ -26,7 +26,7 @@ const FileTree = ({ tree, onOpen, onRun, onDelete }) => {
                   <FaPlay />
                 </Button>
               )}
-              <Button variant="link" size="sm" onClick={() => onDelete(item)} className="text-danger p-0">
+              <Button variant="link" size="sm" onClick={() => onDelete(item.id)} className="text-danger p-0">
                 <FaTrash />
               </Button>
             </div>

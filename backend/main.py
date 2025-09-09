@@ -82,12 +82,15 @@ class ConnectionManager:
             del self.active_connections[websocket]
 
     async def send_status(self, websocket: WebSocket, status: str, message: str):
-        """Envía un mensaje de estado al cliente"""
+        """Envía un mensaje de estado al cliente.
+        Frontend espera 'type'='status' y 'content' con el texto.
+        Conservamos también el campo 'status' para detalles de estado.
+        """
         try:
             await websocket.send_json({
                 "type": "status",
                 "status": status,
-                "message": message
+                "content": message,
             })
         except Exception as e:
             logger.error("Error sending status", extra={"error": str(e), "client": websocket.client})
@@ -235,4 +238,3 @@ async def websocket_endpoint(websocket: WebSocket):
         # Limpieza centralizada a través del manager
         manager.disconnect(websocket)
         logger.info("Connection closed and resources released.", extra={"client": websocket.client})
-
