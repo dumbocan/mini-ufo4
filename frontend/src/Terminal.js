@@ -79,9 +79,18 @@ const XTerm = React.forwardRef((props, ref) => {
   }, [safeFit]);
 
   useImperativeHandle(ref, () => ({
-    write: (text) => {
+    write: (text, cb) => {
       if (xtermInstance.current) {
-        xtermInstance.current.write(text);
+        try {
+          // Support xterm's optional callback for backpressure
+          xtermInstance.current.write(text, typeof cb === 'function' ? cb : undefined);
+        } catch {
+          // Fallback: try without callback
+          try { xtermInstance.current.write(text); } catch {}
+          if (typeof cb === 'function') { try { cb(); } catch {} }
+        }
+      } else if (typeof cb === 'function') {
+        try { cb(); } catch {}
       }
     },
     clear: () => {

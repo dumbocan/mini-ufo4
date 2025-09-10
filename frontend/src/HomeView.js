@@ -7,6 +7,8 @@ function HomeView({
   setPrompt,
   handleGenerate,
   isLoading,
+  planFirst,
+  setPlanFirst,
   projects,
   handleLoadProject,
   handleExecuteProject,
@@ -51,6 +53,14 @@ function HomeView({
                 'Generate'
               )}
             </Button>
+            <Form.Check
+              type="checkbox"
+              id="plan-first-home"
+              className="ms-3 align-self-center"
+              label="Plan first"
+              checked={planFirst}
+              onChange={(e) => setPlanFirst(e.target.checked)}
+            />
           </div>
         </Col>
       </Row>

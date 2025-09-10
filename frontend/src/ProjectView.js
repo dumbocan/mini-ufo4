@@ -25,7 +25,9 @@ function ProjectView({
   handleExecuteProject,
   handleDeleteProject,
   currentProject,
-  editorStyle
+  editorStyle,
+  planFirst,
+  setPlanFirst
 }) {
   return (
     <>
@@ -62,6 +64,14 @@ function ProjectView({
                 'Generate'
               )}
             </Button>
+            <Form.Check
+              type="checkbox"
+              id="plan-first-project"
+              className="align-self-center"
+              label="Plan first"
+              checked={planFirst}
+              onChange={(e) => setPlanFirst(e.target.checked)}
+            />
             <Button
               variant="success"
               onClick={() => handleSaveSession(

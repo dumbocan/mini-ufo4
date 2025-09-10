@@ -1,13 +1,13 @@
 import os
 import shutil
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import json
 from datetime import datetime
 import asyncio
 import sys
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse, Response
 import re
 import importlib.util
 
@@ -48,8 +48,11 @@ def _get_file_tree(path: str, root_path: str):
                 "children": _get_file_tree(item_path, root_path)
             })
         else:
-            # Only include relevant project files
-            if item in ["prompt.txt", "code.py", "console_output.txt", "metadata.json"]:
+            # Only include relevant project files (extend to common web assets)
+            if item in [
+                "prompt.txt", "code.py", "console_output.txt", "metadata.json",
+                "index.html", "styles.css", "script.js"
+            ]:
                 tree.append({
                     "id": rel_path,
                     "name": item,
@@ -88,14 +91,50 @@ async def get_project(project_id: str):
     try:
         with open(os.path.join(project_path, "prompt.txt"), "r") as f:
             prompt = f.read()
-        with open(os.path.join(project_path, "code.py"), "r") as f:
-            code = f.read()
+        # Prefer HTML if present; else fall back to code.py
+        code_file = os.path.join(project_path, "index.html")
+        if os.path.isfile(code_file):
+            with open(code_file, "r") as f:
+                code = f.read()
+        else:
+            with open(os.path.join(project_path, "code.py"), "r") as f:
+                code = f.read()
         with open(os.path.join(project_path, "console_output.txt"), "r") as f:
             console_output = f.read()
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=f"Project content missing: {e}")
     
     return ProjectContent(prompt=prompt, code=code, console_output=console_output)
+
+def _extract_heredoc_files(source: str) -> Tuple[Dict[str, str], str]:
+    """Extrae bloques de tipo heredoc estilo shell:
+    cat > filename << 'EOF'\n...\nEOF
+    Devuelve un dict {filename: contenido} y el resto del texto sin esos bloques.
+    Soporta comillas opcionales y delimitadores alfanuméricos.
+    """
+    pattern = re.compile(
+        r"cat\s*>\s*(?P<fn>[^\s]+)\s*<<\s*['\"]?(?P<delim>[A-Za-z0-9_]+)['\"]?\s*\n(?P<body>.*?)(?:\n)?(?P=delim)\s*",
+        re.DOTALL,
+    )
+    files: Dict[str, str] = {}
+    out_parts: List[str] = []
+    idx = 0
+    while True:
+        m = pattern.search(source, idx)
+        if not m:
+            out_parts.append(source[idx:])
+            break
+        # Append text before match as remainder
+        out_parts.append(source[idx:m.start()])
+        fn = m.group('fn')
+        body = m.group('body')
+        # Normalize filename: prevent path traversal
+        fn = os.path.basename(fn)
+        files[fn] = body
+        idx = m.end()
+    remainder = ''.join(out_parts)
+    return files, remainder
+
 
 @router.post("/", response_model=Project)
 async def create_project(content: ProjectContent, project_name: Optional[str] = None):
@@ -111,8 +150,45 @@ async def create_project(content: ProjectContent, project_name: Optional[str] = 
 
     with open(os.path.join(project_path, "prompt.txt"), "w") as f:
         f.write(content.prompt)
-    with open(os.path.join(project_path, "code.py"), "w") as f:
-        f.write(content.code)
+    # Intentar extraer archivos desde bloques heredoc tipo "cat > file << 'EOF'...EOF"
+    extracted_files, remainder = _extract_heredoc_files(content.code)
+
+    # Si se extrajeron archivos, guardarlos
+    if extracted_files:
+        for name, body in extracted_files.items():
+            safe_name = os.path.basename(name)
+            # Solo permitimos escribir en el directorio del proyecto (no subdirectorios)
+            dest = os.path.join(project_path, safe_name)
+            try:
+                with open(dest, "w", encoding="utf-8") as f:
+                    f.write(body)
+            except Exception as e:
+                # Si hay un error al escribir, lo ignoramos para no romper el guardado del proyecto completo
+                pass
+
+    # Heurística: si parece HTML puro (o ya se extrajo index.html), guardar index.html
+    index_path = os.path.join(project_path, "index.html")
+    wrote_index = False
+    if os.path.isfile(index_path):
+        wrote_index = True
+    else:
+        is_html = "<html" in content.code.lower() or "<!doctype" in content.code.lower()
+        if is_html and not extracted_files:
+            with open(index_path, "w", encoding="utf-8") as f:
+                f.write(content.code)
+            wrote_index = True
+
+    # Guardar code.py con el resto no-heredoc (si existe); si está vacío y hay index.html, dejar code.py como copia del HTML para el editor
+    code_to_save = remainder.strip() if extracted_files else content.code
+    if not code_to_save.strip() and wrote_index:
+        try:
+            with open(index_path, "r", encoding="utf-8") as f:
+                code_to_save = f.read()
+        except Exception:
+            code_to_save = content.code
+
+    with open(os.path.join(project_path, "code.py"), "w", encoding="utf-8") as f:
+        f.write(code_to_save)
     with open(os.path.join(project_path, "console_output.txt"), "w") as f:
         f.write(content.console_output)
     
@@ -384,3 +460,60 @@ async def run_page(project_id: str):
 </html>
 """
     return HTMLResponse(content=html.replace("__PID__", project_id))
+
+
+def _safe_join(base: str, *paths: str) -> str:
+    # Join and ensure path is within base directory
+    joined = os.path.abspath(os.path.join(base, *paths))
+    base = os.path.abspath(base)
+    if os.path.commonpath([joined, base]) != base:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return joined
+
+
+@router.get("/{project_id}/files/{path:path}")
+async def get_project_file(project_id: str, path: str):
+    project_path = os.path.join(PROJECTS_DIR, project_id)
+    if not os.path.isdir(project_path):
+        raise HTTPException(status_code=404, detail="Project not found")
+    full_path = _safe_join(project_path, path)
+    if not os.path.isfile(full_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    # Let Starlette guess content type
+    return FileResponse(full_path)
+
+
+@router.get("/{project_id}/preview", response_class=HTMLResponse)
+async def preview_project(project_id: str):
+    project_path = os.path.join(PROJECTS_DIR, project_id)
+    index_file = os.path.join(project_path, "index.html")
+    if not os.path.isdir(project_path):
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not os.path.isfile(index_file):
+        return HTMLResponse(
+            content=f"<html><body style='font-family:monospace;background:#111;color:#eee;padding:16px'>"
+                    f"<h3>No se encontró index.html en el proyecto {project_id}</h3>"
+                    f"<p>Guarda tu HTML como <code>index.html</code> o pide al agente que genere una web con archivos.</p>"
+                    f"<p><a style='color:#8ab4f8' href='/projects/{project_id}/run'>Ejecutar code.py</a></p>"
+                    f"</body></html>",
+            status_code=200,
+        )
+
+    try:
+        with open(index_file, "r", encoding="utf-8", errors="replace") as f:
+            html = f.read()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading index.html: {e}")
+
+    # Inject <base> for relative assets
+    base_tag = f"<base href=\"/projects/{project_id}/files/\">"
+    if "<head" in html.lower():
+        # Insert after <head>
+        import re as _re
+        def _insert_base(m):
+            return m.group(0) + "\n  " + base_tag
+        html = _re.sub(r"(?i)<head[^>]*>", _insert_base, html, count=1)
+    else:
+        html = base_tag + html
+
+    return HTMLResponse(content=html)

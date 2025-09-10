@@ -176,7 +176,7 @@ async def websocket_endpoint(websocket: WebSocket):
             # Actualizar timestamp del último heartbeat
             session_data["last_heartbeat"] = datetime.now()
 
-            # Verificar si es un mensaje de heartbeat
+            # Verificar si es un mensaje de heartbeat o de control (plan/implement)
             if data.startswith("{"):
                 try:
                     message = json.loads(data)
@@ -184,6 +184,58 @@ async def websocket_endpoint(websocket: WebSocket):
                         logger.debug("Received heartbeat.")
                         await manager.send_status(websocket, "connected", "Heartbeat recibido")
                         continue
+
+                    intent = message.get("intent")
+                    user_prompt = message.get("prompt", "")
+                    if intent in {"plan", "implement"}:
+                        if intent == "plan":
+                            await manager.send_status(websocket, "planning", "Analizando y proponiendo plan")
+                            # Temporariamente desactivar auto_run
+                            prev_auto = session_interpreter.auto_run
+                            session_interpreter.auto_run = False
+                            try:
+                                plan_instructions = (
+                                    "Antes de escribir código, propone un plan claro y conciso.\n"
+                                    "Responde SOLO con un plan sin bloques de código. Incluye: 1) Objetivo, 2) Tecnologías, "
+                                    "3) Archivos y rutas a crear, 4) Estructura de carpetas, 5) Comportamiento esperado, 6) Riesgos/alternativas.\n"
+                                    "Si se trata de una web, usa 'index.html', 'styles.css', 'script.js' en la raíz."
+                                )
+                                prompt_to_send = f"{plan_instructions}\n\nPrompt del usuario:\n{user_prompt}"
+                                response_stream = session_interpreter.chat(prompt_to_send, display=False, stream=True)
+                                for chunk in response_stream:
+                                    if isinstance(chunk, dict):
+                                        # Evitar enviar 'code' en modo plan; conviértelo a 'message'
+                                        if chunk.get("type") == "code":
+                                            content = chunk.get("content", "")
+                                            await websocket.send_text(json.dumps({
+                                                "type": "message",
+                                                "content": content
+                                            }, ensure_ascii=False))
+                                        else:
+                                            await websocket.send_text(json.dumps(chunk, ensure_ascii=False))
+                            finally:
+                                session_interpreter.auto_run = prev_auto
+
+                            await manager.send_status(websocket, "planned", "Plan generado")
+                            await websocket.send_text(json.dumps({"end_of_stream": True}))
+                            # Skip default processing loop iteration
+                            continue
+
+                        elif intent == "implement":
+                            await manager.send_status(websocket, "processing", "Implementando el plan")
+                            approved_plan = message.get("plan", "")
+                            implement_instructions = (
+                                "Implementa el plan aprobado. Si es una web, genera 'index.html', 'styles.css', 'script.js'. "
+                                "Si es Python, genera 'code.py' ejecutable. Evita incluir 'pip install' en el código; "
+                                "usa importaciones normales. Explica decisiones brevemente mientras produces el código."
+                            )
+                            prompt_to_send = (
+                                f"Plan aprobado:\n{approved_plan}\n\n"
+                                f"Instrucciones:\n{implement_instructions}\n\n"
+                                f"Prompt del usuario:\n{user_prompt}"
+                            )
+                            data = prompt_to_send  # caemos al flujo normal con este prompt
+                    # Si no es un intent reconocido, seguimos al flujo normal con el texto original
                 except json.JSONDecodeError:
                     pass  # No es un mensaje JSON válido, tratar como prompt
 

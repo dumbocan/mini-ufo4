@@ -208,6 +208,64 @@ Hola Gemini. Estoy retomando el proyecto "Mini-UFO 4" que construimos juntos.
   - `frontend/` (código React)
   - `generated_projects/` (para proyectos generados por el agente, con logs de contexto).
 
+---
+
+## Diario de Desarrollo
+
+### Día 6 — Estabilización de base, ejecución y persistencia
+
+Cambios de backend
+- Estado WS consistente: el backend envía `type: "status"` con `content` (antes `message`), para alinear con el consumidor del frontend. Archivo: `backend/main.py`.
+- Árbol de archivos: IDs relativos a `generated_projects` (p. ej. `session-.../prompt.txt`) para que el frontend pueda resolver `projectId`. Archivo: `backend/routers/projects.py`.
+- CRUD de proyectos: asegurado guardado de `prompt.txt`, `code.py`, `console_output.txt` y `metadata.json` con `created_at` ISO.
+- Docker: ejecución con volumen persistente. `docker run` monta `backend/generated_projects` dentro del contenedor (Makefile actualizado). Archivo: `backend/Makefile`.
+- Página de ejecución segura (Run):
+  - `POST /projects/{id}/execute` ejecuta `code.py` del proyecto y streaméa `stdout/stderr`. Timeout global de 120s; limpieza de recursos. Archivo: `backend/routers/projects.py`.
+  - Sanitización del código antes de ejecutar: elimina líneas tipo `pip install ...` incrustadas, genera `__sanitized__.py` y detecta paquetes faltantes tanto por líneas explícitas como por análisis de imports (AST). Instala dependencias detectadas en el `venv` del contenedor (mapea alias comunes: `sklearn→scikit-learn`, `cv2→opencv-python`, `PIL→Pillow`, etc.). Archivo: `backend/routers/projects.py`.
+  - Página HTML `GET /projects/{id}/run` que abre una pestaña nueva y muestra la salida en vivo con streaming; corregidos errores JS (función y placeholders) y evitado el problema de llaves en f-strings. Archivo: `backend/routers/projects.py`.
+
+Cambios de frontend
+- Botón “play” en el árbol: abre la pestaña de ejecución del backend. Archivo: `frontend/src/App.js`, `frontend/src/HomeView.js`, `frontend/src/ProjectView.js`.
+- Guardado manual: botón “Save Session” pasa `prompt`, `code` y buffer de terminal. Archivo: `frontend/src/ProjectView.js`.
+- Terminal robusta: backpressure para evitar “write data discarded” de xterm. Se añade cola de escritura, troceo en chunks y callback de `write`. Archivos: `frontend/src/App.js`, `frontend/src/Terminal.js`.
+- No volcar código en la terminal: el editor muestra el código; en la terminal solo se indica `[Code updated: N chars]`. Archivo: `frontend/src/App.js`.
+
+Reparaciones destacadas
+- Conexión WS: los avisos iniciales (“WebSocket is closed…”) se toleran y se reconecta automáticamente.
+- Persistencia real en host: volumen Docker montado; proyectos visibles en `backend/generated_projects` fuera del contenedor.
+- Corrección de la forma de estado; sincronización frontend-backend para evitar toasts erróneos.
+
+Notas de uso
+- Ejecutar backend con volumen: `make docker-build && make docker-run` en `backend/`.
+- Ejecutar frontend: `npm start` en `frontend/`.
+
+### Día 7 — Vista previa HTML y flujo “Plan First”
+
+Vista previa HTML (web renderizada)
+- Detección de HTML: si el código parece HTML, además de `code.py` se guarda como `index.html`. Archivo: `backend/routers/projects.py`.
+- Previsualización: `GET /projects/{id}/preview` renderiza `index.html` en una pestaña nueva e inyecta `<base href="/projects/{id}/files/">` para que funcionen rutas relativas a assets. Archivo: `backend/routers/projects.py`.
+- Archivos estáticos de proyecto: `GET /projects/{id}/files/{path}` sirve `CSS/JS/imágenes` con validación de ruta (path traversal safe). Archivo: `backend/routers/projects.py`.
+- Frontend “play inteligente”: si el editor contiene HTML, “play” abre Preview; si no, abre Run (Python). Archivo: `frontend/src/App.js`.
+
+Planificación antes de ejecutar (“Plan First”)
+- Protocolo WS con intents:
+  - `{"intent":"plan","prompt":"..."}`: el backend desactiva `auto_run` del intérprete y produce solo un plan (sin bloques de código), incluyendo objetivo, tecnologías, archivos/rutas, estructura, comportamiento esperado y riesgos/alternativas. Archivo: `backend/main.py`.
+  - `{"intent":"implement","prompt":"...","plan":"..."}`: el backend implementa el plan aprobado; para web, genera `index.html`, `styles.css`, `script.js`; para Python, `code.py`. Evita `pip install` en el código. Archivo: `backend/main.py`.
+- UI de planificación:
+  - Toggle “Plan first” junto al botón “Generate” en Home y Project.
+  - Modal “Proposed Plan” con el plan recibido; botones “Revise” (cerrar y editar prompt) y “Proceed” (enviar intent `implement`).
+  - No hay auto‑guardado durante la fase de plan; el guardado ocurre tras la implementación. Archivos: `frontend/src/App.js`, `frontend/src/HomeView.js`, `frontend/src/ProjectView.js`.
+
+Otras mejoras y housekeeping
+- `.gitignore`: ignora `backend/generated_projects/` y `backend/test_venv/`.
+- Mensajería WS: normalización de estados (`planning`, `planned`, `processing`, etc.).
+- Documentación: comandos de arranque actualizados (volumen montado) y nuevas capacidades de ejecución/preview.
+
+Problemas conocidos y próximos pasos
+- Latencia inicial WS: puede aparecer un aviso de desconexión antes de conectar; se reintenta automáticamente.
+- Instalación de dependencias pesadas: la primera ejecución que requiera paquetes grandes (pandas/numpy) tardará más; siguientes ejecuciones son rápidas con el mismo contenedor.
+- Mejor aislamiento: opción futura de ejecutar cada “Run” en un contenedor efímero por proyecto/ejecución.
+
 **Problemas Resueltos (hasta ahora):**
 - `ModuleNotFoundError` con `open-interpreter`: Se resolvió usando un `Dockerfile` robusto (Python 3.11-slim, usuario no-root, venv interno) y corrigiendo el `import` de `open_interpreter` a `interpreter`.
 - Problemas de espacio en disco.

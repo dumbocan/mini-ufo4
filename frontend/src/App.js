@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
-import { Container, Row, Col, Form, Button, Spinner, ToastContainer, Toast, Dropdown } from 'react-bootstrap';
+import { Container, Row, Col, Form, Button, Spinner, ToastContainer, Toast, Dropdown, Modal } from 'react-bootstrap';
 import { House, PlayFill, TrashFill } from 'react-bootstrap-icons';
 import Editor from 'react-simple-code-editor';
 import { highlight, languages } from 'prismjs/components/prism-core';
@@ -26,6 +26,10 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [toast, setToast] = useState({ show: false, message: '', type: 'danger' });
+  const [planFirst, setPlanFirst] = useState(false);
+  const [isPlanning, setIsPlanning] = useState(false);
+  const [showPlanModal, setShowPlanModal] = useState(false);
+  const [planText, setPlanText] = useState('');
 
   // Projects + FileTree
   const [projects, setProjects] = useState([]);      // metadata plana
@@ -40,11 +44,19 @@ function App() {
   const socket = useRef(null);
   const reconnectTimer = useRef(null);
   const terminalRef = useRef(null);
+  // Terminal write queue with backpressure
+  const termQueueRef = useRef([]); // array of strings
+  const termWritingRef = useRef(false);
 
   // Buffers
   const currentMessageBuffer = useRef('');
   const currentCodeBuffer = useRef('');
   const lastPromptRef = useRef(''); // New ref to store the last prompt
+  const isPlanningRef = useRef(false);
+  const planTextRef = useRef('');
+
+  useEffect(() => { isPlanningRef.current = isPlanning; }, [isPlanning]);
+  useEffect(() => { planTextRef.current = planText; }, [planText]);
 
   // Tema
   useEffect(() => {
@@ -82,6 +94,35 @@ function App() {
   }, []);
 
   // Conexión WS
+  const processTermQueue = useCallback(() => {
+    if (termWritingRef.current) return;
+    if (!terminalRef.current) return;
+    const next = termQueueRef.current.shift();
+    if (typeof next !== 'string' || next.length === 0) return;
+    termWritingRef.current = true;
+    // Write and when flushed, continue
+    try {
+      terminalRef.current.write(next, () => {
+        termWritingRef.current = false;
+        // Yield to event loop to keep UI responsive
+        setTimeout(processTermQueue, 0);
+      });
+    } catch {
+      termWritingRef.current = false;
+    }
+  }, []);
+
+  const enqueueTerm = useCallback((text) => {
+    if (!text) return;
+    // Chunk large strings to avoid overwhelming xterm
+    const CHUNK = 2048;
+    for (let i = 0; i < text.length; i += CHUNK) {
+      termQueueRef.current.push(text.slice(i, i + CHUNK));
+    }
+    // Kick the processor
+    processTermQueue();
+  }, [processTermQueue]);
+
   const connectWebSocket = useCallback(() => {
     console.log('Attempting to connect WebSocket...');
     socket.current = new WebSocket(WS_URL);
@@ -110,9 +151,7 @@ function App() {
       const message = JSON.parse(event.data);
 
       const writeToTerm = (text, colorCode = '') => {
-        if (terminalRef.current) {
-          terminalRef.current.write(`${colorCode}${text}\x1b[0m`);
-        }
+        enqueueTerm(`${colorCode}${text}\x1b[0m`);
       };
 
       const flushMessageBuffer = () => {
@@ -123,13 +162,25 @@ function App() {
       };
 
       const flushCodeBuffer = () => {
+        // Avoid writing large code blobs to the terminal; it's shown in the editor.
         if (currentCodeBuffer.current) {
-          writeToTerm('\n\x1b[36m--- CODE ---\x1b[0m\n'); // cyan
-          writeToTerm(currentCodeBuffer.current + '\n');
+          const len = currentCodeBuffer.current.length;
+          writeToTerm(`\n\x1b[36m[Code updated: ${len} chars]\x1b[0m\n`);
         }
       };
 
       if (message.end_of_stream) {
+        // If we were in planning mode, show the plan modal and do not autosave
+        if (isPlanningRef.current) {
+          setIsPlanning(false);
+          setIsLoading(false);
+          setPlanText(planTextRef.current);
+          setShowPlanModal(true);
+          // Clear buffers for next stage
+          currentMessageBuffer.current = '';
+          currentCodeBuffer.current = '';
+          return;
+        }
         flushMessageBuffer();
         // Don't flush code buffer here yet.
         setIsLoading(false);
@@ -159,9 +210,9 @@ function App() {
           await fetchFileTree();
         }
 
-        // Now flush the code buffer and clear the terminal
-        flushCodeBuffer(); // This will clear currentCodeBuffer.current
-        if (terminalRef.current) terminalRef.current.clear(); // Clear terminal after saving its content
+        // Now report code update; do not dump full code into terminal
+        flushCodeBuffer();
+        if (terminalRef.current) terminalRef.current.clear();
         return;
       }
 
@@ -175,11 +226,18 @@ function App() {
       }
 
       if (message.type === 'message' && message.content) {
-        currentMessageBuffer.current += message.content;
+        if (isPlanningRef.current) {
+          // Accumulate plan text only in planning mode
+          planTextRef.current += message.content;
+        } else {
+          currentMessageBuffer.current += message.content;
+        }
       } else if (message.type === 'code' && message.content) {
-        flushMessageBuffer();
-        currentCodeBuffer.current += message.content;
-        setCode(prev => prev + message.content);
+        if (!isPlanningRef.current) {
+          flushMessageBuffer();
+          currentCodeBuffer.current += message.content;
+          setCode(prev => prev + message.content);
+        }
       } else if (message.type === 'console' && message.content) {
         flushMessageBuffer();
         writeToTerm('\n\x1b[33m--- OUTPUT ---\x1b[0m\n'); // yellow
@@ -238,8 +296,28 @@ function App() {
       currentCodeBuffer.current = '';
       console.log('Prompt before sending to WS:', prompt);
       lastPromptRef.current = prompt; // Store the prompt in the ref
-      socket.current.send(prompt);
+      if (planFirst) {
+        setIsPlanning(true);
+        setPlanText('');
+        planTextRef.current = '';
+        socket.current.send(JSON.stringify({ intent: 'plan', prompt }));
+      } else {
+        socket.current.send(prompt);
+      }
     }
+  };
+
+  const handleProceedImplementation = () => {
+    if (!socket.current || socket.current.readyState !== WebSocket.OPEN) {
+      setToast({ show: true, message: 'Not connected to backend.', type: 'danger' });
+      return;
+    }
+    setShowPlanModal(false);
+    setIsPlanning(false);
+    setIsLoading(true);
+    currentMessageBuffer.current = '';
+    currentCodeBuffer.current = '';
+    socket.current.send(JSON.stringify({ intent: 'implement', prompt: lastPromptRef.current, plan: planTextRef.current }));
   };
 
   const handleSaveSession = async (currentPrompt, generatedCode, consoleOutput) => {
@@ -352,13 +430,16 @@ function App() {
   };
 
   const handleExecuteProject = (item) => {
-    // Abre una nueva pestaña apuntando a la página de ejecución del backend
+    // Si estamos en ProjectView y el editor contiene HTML, abre preview
+    const looksLikeHTML = typeof code === 'string' && /<html|<!doctype/i.test(code);
     let projectId = item.id;
     if (item.type === 'file') {
       const parts = String(item.id).split('/');
       projectId = parts[0];
     }
-    const url = `http://localhost:8000/projects/${projectId}/run`;
+    const url = looksLikeHTML
+      ? `http://localhost:8000/projects/${projectId}/preview`
+      : `http://localhost:8000/projects/${projectId}/run`;
     window.open(url, '_blank', 'noopener');
   };
 
@@ -382,6 +463,20 @@ function App() {
 
   return (
     <Container fluid className={`app-container ${theme} pt-1`}>
+      <Modal show={showPlanModal} onHide={() => setShowPlanModal(false)} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>Proposed Plan</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <div style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', maxHeight: 400, overflowY: 'auto' }}>
+            {planText || '(empty)'}
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowPlanModal(false)}>Revise</Button>
+          <Button variant="primary" onClick={handleProceedImplementation}>Proceed</Button>
+        </Modal.Footer>
+      </Modal>
       <ToastContainer position="top-end" className="p-2" style={{ zIndex: 1 }}>
         <Toast onClose={() => setToast({ ...toast, show: false })} show={toast.show} delay={5000} autohide bg={toast.type}>
           <Toast.Header>
@@ -429,6 +524,8 @@ function App() {
           setPrompt={setPrompt}
           handleGenerate={handleGenerate}
           isLoading={isLoading}
+          planFirst={planFirst}
+          setPlanFirst={setPlanFirst}
           projects={projects}
           handleLoadProject={handleLoadProject}
           fileTreeData={fileTreeData}
@@ -454,6 +551,8 @@ function App() {
           handleDeleteProject={handleDeleteProject}
           currentProject={currentProject}
           editorStyle={editorStyle}
+          planFirst={planFirst}
+          setPlanFirst={setPlanFirst}
         />
       )}
     </Container>
