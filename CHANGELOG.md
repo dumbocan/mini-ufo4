@@ -25,6 +25,23 @@ Formato inspirado en “Keep a Changelog”. Fechas en AAAA‑MM‑DD. Secciones
 
 ---
 
+## 2025-09-10 — Día 8
+
+### Added
+- Flujo de chat único (sin modales) con generación y edición posterior sobre el mismo proyecto.
+- Filtro del árbol de archivos para mostrar solo la carpeta del proyecto activo en la vista Project.
+- Throttling de mensajes del LLM en consola y etiqueta “Streaming…” en el editor durante la generación.
+- Extracción adicional de archivos desde respuestas del agente:
+  - Soporte para `echo '...\n...' > ruta/archivo` (multilínea).
+  - Soporte para `mkdir -p ruta/sub` (creación de subcarpetas).
+
+### Changed
+- Vista Project aparece inmediatamente al pulsar Generate con proyecto temporal “Generating…”.
+- Árbol de archivos ahora lista todos los ficheros y subcarpetas del proyecto (en backend), y el frontend lo filtra por proyecto activo.
+
+### Fixed
+- Mantener viva la conexión WS durante streams largos actualizando el heartbeat en cada chunk (evita desconexiones por timeout).
+
 ## 2025-09-08 — Día 6
 
 ### Added
@@ -45,4 +62,3 @@ Formato inspirado en “Keep a Changelog”. Fechas en AAAA‑MM‑DD. Secciones
 
 ### Security
 - Ejecución bajo usuario no‑root en contenedor con límites de CPU/RAM (según `docker run` del Makefile) y timeout de ejecución.
-

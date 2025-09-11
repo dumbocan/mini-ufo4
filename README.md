@@ -212,6 +212,34 @@ Hola Gemini. Estoy retomando el proyecto "Mini-UFO 4" que construimos juntos.
 
 ## Diario de Desarrollo
 
+### Día 8 — Live chat, proyecto vivo y extracción avanzada (rama: live-chat-diff)
+
+Cambios clave (frontend)
+- Chat único: eliminados modales/flows secundarios. Conversas con el agente antes y después de generar sin cambiar de contexto. Archivo: `frontend/src/App.js`.
+- Generación limpia: al pulsar Generate se cambia inmediatamente a Project, se limpian editor y consola y se muestra un proyecto temporal “Generating…”. Archivos: `frontend/src/App.js`, `frontend/src/ProjectView.js`.
+- Árbol enfocado: en Project se muestra solo la carpeta del proyecto actual, no todos los proyectos. Archivo: `frontend/src/ProjectView.js`.
+- Mensajes en vivo sin saturación: la consola escribe mensajes del LLM con throttling (150 ms) y el editor indica “Streaming…”. Archivos: `frontend/src/App.js`, `frontend/src/ProjectView.js`.
+
+Cambios clave (backend)
+- Keep‑alive en streams largos: durante el streaming se actualiza el heartbeat para evitar desconexiones por timeout. Archivo: `backend/main.py`.
+- Extracción avanzada de ficheros a partir de respuestas del agente:
+  - Heredocs shell: `cat > file << 'EOF' ... EOF`.
+  - Celdas Jupyter: `%%writefile ruta/archivo`.
+  - Comandos echo multilínea: `echo '...\n...' > ruta/archivo`.
+  - Creación de carpetas: `mkdir -p ruta/sub`.
+  - Seguridad: solo escribe dentro de la carpeta del proyecto (path join seguro) y crea subdirectorios necesarios. Archivo: `backend/routers/projects.py`.
+- Árbol de archivos: ahora lista todos los ficheros y subcarpetas del proyecto (no solo un subconjunto fijo). Archivo: `backend/routers/projects.py`.
+
+Notas de uso
+- Botón único “Generate”: inicia la generación y mantiene el mismo chat para peticiones posteriores (ediciones incrementales).
+- Vista Preview/Run: el botón play abre Preview si hay `index.html` o Run si es Python.
+- Guardado: al terminar se guarda el proyecto; también puedes forzar “Save Session”. Tras guardar se refresca el árbol y se carga el proyecto resultante automáticamente.
+
+Próximos pasos (plan)
+- Cambios incrementales por diff unificado (verde/rojo) aplicados por backend, con verificación/auto‑reparación antes de “entregar”.
+- Persistir historial de chat por proyecto (`chat.json`) para mantener el contexto a lo largo del tiempo.
+- Ajuste de modelo/parámetros DeepSeek para menor latencia (p. ej., `deepseek/deepseek-coder-lite`, `temperature=0.2`).
+
 ### Día 6 — Estabilización de base, ejecución y persistencia
 
 Cambios de backend
