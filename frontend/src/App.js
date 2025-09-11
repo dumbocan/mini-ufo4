@@ -28,8 +28,8 @@ function App() {
   const [toast, setToast] = useState({ show: false, message: '', type: 'danger' });
   const [planFirst, setPlanFirst] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
-  const [showPlanModal, setShowPlanModal] = useState(false);
   const [planText, setPlanText] = useState('');
+  const [planningReply, setPlanningReply] = useState('');
 
   // Projects + FileTree
   const [projects, setProjects] = useState([]);      // metadata plana
@@ -47,6 +47,7 @@ function App() {
   // Terminal write queue with backpressure
   const termQueueRef = useRef([]); // array of strings
   const termWritingRef = useRef(false);
+  const messageFlushPending = useRef(false);
 
   // Buffers
   const currentMessageBuffer = useRef('');
@@ -54,6 +55,7 @@ function App() {
   const lastPromptRef = useRef(''); // New ref to store the last prompt
   const isPlanningRef = useRef(false);
   const planTextRef = useRef('');
+  const suppressAutoLoadOnConnect = useRef(false);
 
   useEffect(() => { isPlanningRef.current = isPlanning; }, [isPlanning]);
   useEffect(() => { planTextRef.current = planText; }, [planText]);
@@ -140,11 +142,13 @@ function App() {
       fetchProjectMetadata();
       fetchFileTree();
 
-      // Automatically load the most recent project
-      if (projects.length > 0) {
+      // Auto-load the most recent project only if no generation is in progress
+      if (!suppressAutoLoadOnConnect.current && projects.length > 0) {
         const sortedProjects = [...projects].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
         handleLoadSession(sortedProjects[0]);
       }
+      // Reset the suppression flag after connect
+      suppressAutoLoadOnConnect.current = false;
     };
 
     socket.current.onmessage = async (event) => {
@@ -175,7 +179,6 @@ function App() {
           setIsPlanning(false);
           setIsLoading(false);
           setPlanText(planTextRef.current);
-          setShowPlanModal(true);
           // Clear buffers for next stage
           currentMessageBuffer.current = '';
           currentCodeBuffer.current = '';
@@ -227,10 +230,22 @@ function App() {
 
       if (message.type === 'message' && message.content) {
         if (isPlanningRef.current) {
-          // Accumulate plan text only in planning mode
+          // Accumular plan solo en modo planificación
           planTextRef.current += message.content;
         } else {
+          // Acumular y programar un flush con throttling para no saturar la terminal
           currentMessageBuffer.current += message.content;
+          if (!messageFlushPending.current) {
+            messageFlushPending.current = true;
+            setTimeout(() => {
+              if (currentMessageBuffer.current) {
+                // Escribimos sin salto para mantener el flujo natural
+                writeToTerm(currentMessageBuffer.current);
+                currentMessageBuffer.current = '';
+              }
+              messageFlushPending.current = false;
+            }, 150);
+          }
         }
       } else if (message.type === 'code' && message.content) {
         if (!isPlanningRef.current) {
@@ -290,10 +305,19 @@ function App() {
       if (terminalRef.current) terminalRef.current.write('Please enter a prompt and ensure you are connected to the backend.\n');
       setToast({ show: true, message: 'Please enter a prompt and ensure you are connected to the backend.', type: 'danger' });
     } else {
+      // Cambiar a vista de proyecto al iniciar la generación
+      setCurrentView('project');
+      if (!currentProject) {
+        const tempId = `session-pending-${Date.now()}`;
+        setCurrentProject({ id: tempId, name: 'Generating…' });
+      }
+      // Evitar que el autoload de onopen cargue el último proyecto
+      suppressAutoLoadOnConnect.current = true;
       setIsLoading(true);
       if (terminalRef.current) terminalRef.current.clear();
       currentMessageBuffer.current = '';
       currentCodeBuffer.current = '';
+      setCode('');
       console.log('Prompt before sending to WS:', prompt);
       lastPromptRef.current = prompt; // Store the prompt in the ref
       if (planFirst) {
@@ -305,6 +329,21 @@ function App() {
         socket.current.send(prompt);
       }
     }
+  };
+
+  const handlePlanClarify = () => {
+    if (!socket.current || socket.current.readyState !== WebSocket.OPEN) {
+      setToast({ show: true, message: 'Not connected to backend.', type: 'danger' });
+      return;
+    }
+    if (!planningReply.trim()) return;
+    setIsPlanning(true);
+    // Append clarification to the prompt context and re-request plan
+    const newPrompt = `${lastPromptRef.current}\n\nAclaración del usuario: ${planningReply.trim()}`;
+    lastPromptRef.current = newPrompt;
+    setPlanningReply('');
+    planTextRef.current += `\n\n[User]: ${planningReply.trim()}\n`;
+    socket.current.send(JSON.stringify({ intent: 'plan', prompt: newPrompt }));
   };
 
   const handleProceedImplementation = () => {
@@ -339,10 +378,16 @@ function App() {
       });
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const newProject = await res.json();
-      // fetchProjectMetadata and fetchFileTree are already called in onopen and after save.
-      // No need to call them here again, as handleLoadSession will trigger them.
       if (terminalRef.current) terminalRef.current.write(`Session saved as: ${newProject.name}\n`);
       setToast({ show: true, message: `Session saved as: ${newProject.name}`, type: 'success' });
+      // Refresh lists and load the saved project so tree updates immediately
+      try {
+        await fetchProjectMetadata();
+        await fetchFileTree();
+        if (newProject) {
+          await handleLoadSession(newProject);
+        }
+      } catch {}
       return newProject;
     } catch (error) {
       console.error('Error saving session:', error);
@@ -553,6 +598,11 @@ function App() {
           editorStyle={editorStyle}
           planFirst={planFirst}
           setPlanFirst={setPlanFirst}
+          isPlanning={isPlanning}
+          planText={planText}
+          planningReply={planningReply}
+          setPlanningReply={setPlanningReply}
+          handlePlanClarify={handlePlanClarify}
         />
       )}
     </Container>

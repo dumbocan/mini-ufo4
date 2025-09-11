@@ -250,6 +250,8 @@ async def websocket_endpoint(websocket: WebSocket):
             
             logger.debug("Iterating through interpreter response stream...")
             for chunk in response_stream:
+                # Marca actividad para evitar que el watchdog cierre la conexión durante streams largos
+                session_data["last_heartbeat"] = datetime.now()
                 try:
                     logger.debug(f"Processing chunk: {chunk}")
                     if isinstance(chunk, dict):

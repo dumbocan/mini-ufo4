@@ -48,16 +48,12 @@ def _get_file_tree(path: str, root_path: str):
                 "children": _get_file_tree(item_path, root_path)
             })
         else:
-            # Only include relevant project files (extend to common web assets)
-            if item in [
-                "prompt.txt", "code.py", "console_output.txt", "metadata.json",
-                "index.html", "styles.css", "script.js"
-            ]:
-                tree.append({
-                    "id": rel_path,
-                    "name": item,
-                    "type": "file"
-                })
+            # Include all files (we already restrict traversal to project root)
+            tree.append({
+                "id": rel_path,
+                "name": item,
+                "type": "file"
+            })
     return tree
 
 @router.get("/tree", response_model=List[dict])
@@ -128,11 +124,60 @@ def _extract_heredoc_files(source: str) -> Tuple[Dict[str, str], str]:
         out_parts.append(source[idx:m.start()])
         fn = m.group('fn')
         body = m.group('body')
-        # Normalize filename: prevent path traversal
-        fn = os.path.basename(fn)
         files[fn] = body
         idx = m.end()
     remainder = ''.join(out_parts)
+    return files, remainder
+
+
+def _extract_writefile_blocks(source: str) -> Tuple[Dict[str, str], str]:
+    """Extrae bloques estilo Jupyter %%writefile path\n<body> hasta próximo %%writefile, cierre de bloque ``` o EOF."""
+    pattern = re.compile(r"^%%writefile\s+(?P<fn>[^\s]+)\s*\n(?P<body>.*?)(?=^%%writefile\s+|^```|\Z)", re.MULTILINE | re.DOTALL)
+    files: Dict[str, str] = {}
+    parts: List[str] = []
+    idx = 0
+    while True:
+        m = pattern.search(source, idx)
+        if not m:
+            parts.append(source[idx:])
+            break
+        parts.append(source[idx:m.start()])
+        fn = m.group('fn').strip()
+        body = m.group('body')
+        files[fn] = body
+        idx = m.end()
+    remainder = ''.join(parts)
+    return files, remainder
+
+
+def _extract_mkdirs(source: str) -> Tuple[List[str], str]:
+    """Detecta líneas 'mkdir -p <path>' y devuelve la lista de rutas a crear y el texto sin esas líneas."""
+    pattern = re.compile(r"^\s*mkdir\s+-p\s+([^\s;&|]+)\s*$", re.MULTILINE)
+    dirs: List[str] = []
+    remainder = pattern.sub(lambda m: (dirs.append(m.group(1)) or ''), source)
+    return dirs, remainder
+
+
+def _extract_echo_writes(source: str) -> Tuple[Dict[str, str], str]:
+    """Extrae comandos tipo: echo '...multilínea...' > path/archivo
+    Soporta comillas simples o dobles. Devuelve dict {filename: contenido} y el resto.
+    """
+    # Nota: usamos non-greedy para el cuerpo y DOTALL para multilínea
+    pattern = re.compile(r"^\s*echo\s+(['\"])(?P<body>.*?)\1\s*>\s*(?P<fn>[^\s;&|]+)\s*$", re.MULTILINE | re.DOTALL)
+    files: Dict[str, str] = {}
+    parts: List[str] = []
+    idx = 0
+    while True:
+        m = pattern.search(source, idx)
+        if not m:
+            parts.append(source[idx:])
+            break
+        parts.append(source[idx:m.start()])
+        body = m.group('body')
+        fn = m.group('fn').strip()
+        files[fn] = body
+        idx = m.end()
+    remainder = ''.join(parts)
     return files, remainder
 
 
@@ -150,20 +195,39 @@ async def create_project(content: ProjectContent, project_name: Optional[str] = 
 
     with open(os.path.join(project_path, "prompt.txt"), "w") as f:
         f.write(content.prompt)
-    # Intentar extraer archivos desde bloques heredoc tipo "cat > file << 'EOF'...EOF"
-    extracted_files, remainder = _extract_heredoc_files(content.code)
 
-    # Si se extrajeron archivos, guardarlos
+    # 1) Crear directorios solicitados via 'mkdir -p'
+    mkdirs, remainder0 = _extract_mkdirs(content.code)
+    for d in mkdirs:
+        try:
+            target = _safe_join(project_path, d)
+            os.makedirs(target, exist_ok=True)
+        except Exception:
+            pass
+
+    # 2) Extraer bloques heredoc con 'cat > file << EOF'
+    extracted_files, remainder1 = _extract_heredoc_files(remainder0)
+
+    # 3) Extraer bloques Jupyter '%%writefile path' (se suman a los heredoc)
+    wf_files, remainder2 = _extract_writefile_blocks(remainder1)
+    for k, v in wf_files.items():
+        extracted_files[k] = v
+
+    # 4) Extraer comandos echo '...' > archivo
+    echo_files, remainder3 = _extract_echo_writes(remainder2)
+    for k, v in echo_files.items():
+        extracted_files[k] = v
+
+    # Guardar archivos extraídos, permitiendo subdirectorios seguros
     if extracted_files:
         for name, body in extracted_files.items():
-            safe_name = os.path.basename(name)
-            # Solo permitimos escribir en el directorio del proyecto (no subdirectorios)
-            dest = os.path.join(project_path, safe_name)
             try:
+                dest = _safe_join(project_path, name)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with open(dest, "w", encoding="utf-8") as f:
                     f.write(body)
-            except Exception as e:
-                # Si hay un error al escribir, lo ignoramos para no romper el guardado del proyecto completo
+            except Exception:
+                # No romper el guardado por fallos puntuales
                 pass
 
     # Heurística: si parece HTML puro (o ya se extrajo index.html), guardar index.html
@@ -179,7 +243,7 @@ async def create_project(content: ProjectContent, project_name: Optional[str] = 
             wrote_index = True
 
     # Guardar code.py con el resto no-heredoc (si existe); si está vacío y hay index.html, dejar code.py como copia del HTML para el editor
-    code_to_save = remainder.strip() if extracted_files else content.code
+    code_to_save = remainder3.strip() if (extracted_files or mkdirs) else content.code
     if not code_to_save.strip() and wrote_index:
         try:
             with open(index_path, "r", encoding="utf-8") as f:

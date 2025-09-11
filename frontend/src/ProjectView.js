@@ -27,12 +27,43 @@ function ProjectView({
   currentProject,
   editorStyle,
   planFirst,
-  setPlanFirst
+  setPlanFirst,
+  isPlanning,
+  planText,
+  planningReply,
+  setPlanningReply,
+  handlePlanClarify
 }) {
+  const filteredTree = Array.isArray(fileTreeData) && currentProject?.id
+    ? fileTreeData.filter(n => n.id === currentProject.id)
+    : fileTreeData;
   return (
     <>
       <Row className="mb-3">
         <Col lg={6}>
+          {planFirst && (
+            <div className="mb-3" style={{ border: '1px solid var(--border-color)', borderRadius: 4, padding: 8 }}>
+              <div className="d-flex justify-content-between align-items-center">
+                <strong>Planning Chat</strong>
+                {isPlanning && <span style={{ fontSize: '0.85rem', color: 'var(--text-muted, #adb5bd)' }}>Thinking…</span>}
+              </div>
+              <div style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', maxHeight: 160, overflowY: 'auto', marginTop: 6 }}>
+                {planText || 'Sin plan aún. Pulsa Generate para empezar.'}
+              </div>
+              <div className="d-flex gap-2 mt-2">
+                <Form.Control
+                  type="text"
+                  placeholder="Escribe una aclaración o preferencia (colores, imagen, estructura)..."
+                  value={planningReply}
+                  onChange={(e) => setPlanningReply(e.target.value)}
+                  disabled={isPlanning}
+                />
+                <Button variant="outline-primary" onClick={handlePlanClarify} disabled={isPlanning || !planningReply.trim()}>
+                  Ask
+                </Button>
+              </div>
+            </div>
+          )}
           <Form.Group controlId="prompt-textarea">
             <Form.Label>Your Prompt</Form.Label>
             <Form.Control
@@ -89,7 +120,7 @@ function ProjectView({
 
           <h5 className="mt-4">File Tree</h5>
           <FileTree
-            tree={fileTreeData}
+            tree={filteredTree}
             onOpen={handleLoadSession}
             onRun={handleExecuteProject}
             onDelete={handleDeleteProject}
@@ -97,7 +128,14 @@ function ProjectView({
         </Col>
 
         <Col lg={6}>
-          <h5>Generated Code</h5>
+          <h5>
+            Generated Code
+            {isLoading && (
+              <span className="ms-2" style={{ fontSize: '0.9rem', color: 'var(--text-muted, #adb5bd)' }}>
+                Streaming...
+              </span>
+            )}
+          </h5>
           {isLoading && (
             <div className="text-center my-3">
               <Spinner animation="border" role="status" aria-hidden="true" />
